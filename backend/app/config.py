@@ -12,16 +12,29 @@ class Settings(BaseSettings):
     postgres_port: int = 5433
     postgres_db: str = "puzzle"
     bi_reader_password: str = "bi_reader"
+    app_password: str = "app"
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
 
     row_limit: int = 50_000
+    # Детальная таблица живёт в памяти сессии и в браузер не уезжает,
+    # поэтому её потолок выше: вся плоская таблица — 122 719 строк.
+    detail_row_limit: int = 200_000
+    session_ttl_minutes: int = 180
+    max_sessions: int = 64
 
     @property
     def bi_reader_dsn(self) -> str:
         return (
             f"postgresql://bi_reader:{self.bi_reader_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def app_dsn(self) -> str:
+        return (
+            f"postgresql://app:{self.app_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 

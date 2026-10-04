@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.config import settings
-from app.schema import Dimension, Metric, Period, QuerySpec, RelativePeriod
+from app.schema import Dimension, Filter, Metric, Period, QuerySpec, RelativePeriod
 
 DIMENSION_SQL: dict[Dimension, str] = {
     Dimension.MONTH: "month",
@@ -32,6 +32,7 @@ METRIC_SQL: dict[Metric, str] = {
     Metric.PLAN_QTY: "sum(plan_qty)",
     Metric.FACT_QTY: "sum(fact_qty)",
     Metric.SALES_COUNT: "sum(sales_count)",
+    Metric.DISCOUNT_AMOUNT: "sum(discount_amount)",
 }
 
 # По времени фильтруем периодом, а не списком значений.
@@ -138,3 +139,90 @@ def build(spec: QuerySpec, horizon_month: date) -> BuiltQuery:
     sql += f"\nLIMIT {limit}"
 
     return BuiltQuery(sql=sql, params=params, date_from=date_from, date_to=date_to, notes=notes)
+
+
+# Атрибуты, которые едут в плоскую таблицу сессии. Зерно вьюхи уже
+# «месяц × точка × продукт», поэтому агрегировать тут нечего — только отобрать.
+DETAIL_COLUMNS: list[str] = [
+    "month",
+    "region_name",
+    "outlet_name",
+    "city",
+    "outlet_type",
+    "product_name",
+    "category",
+]
+
+DETAIL_METRICS: list[Metric] = list(Metric)
+
+# client_count в детальной таблице отсутствует намеренно: это count(distinct),
+# складывать его нельзя, а в pandas число активных клиентов всё равно не
+# восстановить из суммы. Активные точки и продукты считаются по атрибутам.
+
+
+def build_detail(
+    spec: QuerySpec,
+    horizon_month: date,
+    lookback_months: int = 12,
+) -> BuiltQuery:
+    """Плоская таблица сессии: детальные строки без группировки.
+
+    Окно расширено назад на lookback_months — иначе «динамика к прошлому
+    периоду» и шаг growth не на чем считать: предыдущего периода в выборке нет.
+    """
+    notes: list[str] = []
+    date_from, date_to, period_notes = resolve_period(spec.period, horizon_month)
+    notes += period_notes
+
+    if spec.clip_to_fact_horizon and (date_to is None or date_to > horizon_month):
+        notes.append(
+            f"План обрезан по {horizon_month:%m.%Y} — дальше факта ещё нет, "
+            "иначе выполнение выглядело бы заниженным."
+        )
+        date_to = horizon_month
+
+    where_parts: list[str] = []
+    params: list[object] = []
+    if date_from is not None:
+        where_parts.append("month >= %s")
+        params.append(_shift_months(date_from, -lookback_months))
+    if date_to is not None:
+        where_parts.append("month <= %s")
+        params.append(date_to)
+    for flt in spec.filters:
+        column = FILTERABLE.get(flt.dimension)
+        if column is None:
+            continue
+        where_parts.append(f"{column} = ANY(%s)")
+        params.append(flt.values)
+
+    columns = ", ".join(DETAIL_COLUMNS + [m.value for m in DETAIL_METRICS])
+    sql = f"SELECT {columns}\nFROM plan_fact_flat"
+    if where_parts:
+        sql += "\nWHERE " + "\n  AND ".join(where_parts)
+    sql += f"\nLIMIT {settings.detail_row_limit}"
+
+    return BuiltQuery(sql=sql, params=params, date_from=date_from, date_to=date_to, notes=notes)
+
+
+def filter_values(dimension: Dimension, narrow: list[Filter]) -> BuiltQuery:
+    """Список значений одного разреза, суженный другими фильтрами.
+
+    Нужен каскаду регион→точка: список точек должен показывать только те,
+    что лежат в выбранных регионах.
+    """
+    column = FILTERABLE[dimension]
+    where_parts: list[str] = []
+    params: list[object] = []
+    for flt in narrow:
+        other = FILTERABLE.get(flt.dimension)
+        if other is None or flt.dimension is dimension:
+            continue
+        where_parts.append(f"{other} = ANY(%s)")
+        params.append(flt.values)
+
+    sql = f"SELECT DISTINCT {column} AS value\nFROM plan_fact_flat"
+    if where_parts:
+        sql += "\nWHERE " + "\n  AND ".join(where_parts)
+    sql += "\nORDER BY value"
+    return BuiltQuery(sql=sql, params=params, date_from=None, date_to=None)
