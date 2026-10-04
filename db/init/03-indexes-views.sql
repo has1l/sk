@@ -24,15 +24,19 @@ CREATE INDEX products_category_idx   ON products (category);
 -- Факт, поднятый до зерна плана. Без этого шага джойн с планом размножает
 -- plan_amount по числу продаж: на один (месяц, точка, продукт) приходится
 -- до 4 строк продаж — разные договоры и клиенты.
+-- Скидки приджойнены здесь же: одна строка на продажу, покрыто 16,5% продаж,
+-- поэтому LEFT JOIN и coalesce — иначе непокрытые продажи выпали бы из факта.
 CREATE MATERIALIZED VIEW sales_monthly AS
-SELECT date_trunc('month', sale_date)::date AS month,
-       outlet_id,
-       product_id,
-       sum(amount)              AS fact_amount,
-       sum(quantity)            AS fact_qty,
-       count(*)                 AS sales_count,
-       count(DISTINCT client_id) AS client_count
-FROM sales
+SELECT date_trunc('month', s.sale_date)::date AS month,
+       s.outlet_id,
+       s.product_id,
+       sum(s.amount)               AS fact_amount,
+       sum(s.quantity)             AS fact_qty,
+       count(*)                    AS sales_count,
+       count(DISTINCT s.client_id) AS client_count,
+       coalesce(sum(d.discount_amount), 0) AS discount_amount
+FROM sales s
+LEFT JOIN discounts d ON d.sale_id = s.sale_id
 GROUP BY 1, 2, 3;
 
 CREATE UNIQUE INDEX sales_monthly_grain_idx ON sales_monthly (month, outlet_id, product_id);
@@ -50,7 +54,8 @@ SELECT COALESCE(p.plan_month, f.month)      AS month,
        COALESCE(f.fact_amount, 0)  AS fact_amount,
        COALESCE(f.fact_qty,    0)  AS fact_qty,
        COALESCE(f.sales_count, 0)  AS sales_count,
-       COALESCE(f.client_count, 0) AS client_count
+       COALESCE(f.client_count, 0) AS client_count,
+       COALESCE(f.discount_amount, 0) AS discount_amount
 FROM sales_plan p
 FULL OUTER JOIN sales_monthly f
   ON  p.plan_month = f.month
@@ -67,7 +72,7 @@ SELECT pf.month,
        pf.product_id, p.product_name, p.category,
        pf.plan_amount, pf.plan_qty,
        pf.fact_amount, pf.fact_qty,
-       pf.sales_count, pf.client_count
+       pf.sales_count, pf.client_count, pf.discount_amount
 FROM plan_fact_monthly pf
 JOIN outlets  o ON o.outlet_id  = pf.outlet_id
 JOIN regions  r ON r.region_id  = o.region_id
