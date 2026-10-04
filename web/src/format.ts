@@ -36,7 +36,7 @@ function decimal(value: number, digits: number): string {
     .replace(/\s/g, NBSP);
 }
 
-const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+export const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 const ROMAN = ["I", "II", "III", "IV"];
 
 /** Даты из базы приходят первым днём периода — показываем сам период. */
@@ -54,5 +54,35 @@ export function cellValue(value: unknown, unit: string, field: string): string {
   }
   if (typeof value !== "number") return String(value);
   if (unit === "rub") return money(value);
+  if (unit === "percent") return percent(value);
+  if (unit === "rank") return String(Math.round(value));
   return count(value);
+}
+
+export function signedPercent(value: number, digits = 1): string {
+  return `${value >= 0 ? "+" : "−"}${decimal(Math.abs(value), digits)}%`;
+}
+
+export function signedMoney(value: number): string {
+  return `${value >= 0 ? "+" : "−"}${money(Math.abs(value))}`;
+}
+
+/** Значение KPI-карточки. Знак у дельты обязателен: «−119,5 млн ₽» и
+ *  «119,5 млн ₽» — разные новости. */
+export function kpiValue(value: number | null, unit: string, kind: string): string {
+  if (value === null) return "—";
+  if (unit === "percent") return kind === "delta" ? signedPercent(value) : percent(value);
+  if (unit === "rub") return kind === "delta" ? signedMoney(value) : money(value);
+  return count(value);
+}
+
+/** Названия точек в датасете содержат адрес целиком — на оси это каша. */
+export function shortLabel(value: string, limit = 26): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit - 1).trimEnd()}…`;
+}
+
+export function dateTime(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }

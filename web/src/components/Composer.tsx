@@ -1,13 +1,36 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const EXAMPLES = [
-  "Покажи план-факт продаж по регионам за последний квартал",
-  "Динамика продаж по месяцам за последний год",
-  "Структура продаж по категориям за последний месяц",
+import * as api from "../api";
+import type { QueryTemplate } from "../types";
+
+const FALLBACK: QueryTemplate[] = [
+  { group: "Дашборды", question: "Собери дашборд по продажам: план-факт по регионам за последний год" },
+  { group: "Вычисления", question: "Добавь колонку с процентом выполнения плана" },
+  { group: "Интерактив", question: "Покажи только Центральный регион" },
 ];
 
-export function Composer({ busy, onSend }: { busy: boolean; onSend: (q: string) => void }) {
+export function Composer({
+  busy,
+  hasSession,
+  onSend,
+}: {
+  busy: boolean;
+  hasSession: boolean;
+  onSend: (question: string) => void;
+}) {
   const [value, setValue] = useState("");
+  const [templates, setTemplates] = useState<QueryTemplate[]>(FALLBACK);
+  const [group, setGroup] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listTemplates().then(setTemplates).catch(() => undefined);
+  }, []);
+
+  const groups = useMemo(() => [...new Set(templates.map((t) => t.group))], [templates]);
+  const shown = useMemo(() => {
+    const picked = group ?? (hasSession ? groups[1] ?? groups[0] : groups[0]);
+    return templates.filter((t) => t.group === picked).slice(0, 6);
+  }, [templates, group, groups, hasSession]);
 
   const send = (text: string) => {
     const question = text.trim();
@@ -18,10 +41,21 @@ export function Composer({ busy, onSend }: { busy: boolean; onSend: (q: string) 
 
   return (
     <div className="composer">
+      <div className="template-groups">
+        {groups.map((name) => (
+          <button
+            key={name}
+            className={name === (group ?? (hasSession ? groups[1] ?? groups[0] : groups[0])) ? "on" : ""}
+            onClick={() => setGroup(name)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
       <div className="examples">
-        {EXAMPLES.map((example) => (
-          <button key={example} disabled={busy} onClick={() => send(example)}>
-            {example}
+        {shown.map((template) => (
+          <button key={template.question} disabled={busy} onClick={() => send(template.question)}>
+            {template.question}
           </button>
         ))}
       </div>
@@ -34,7 +68,7 @@ export function Composer({ busy, onSend }: { busy: boolean; onSend: (q: string) 
         <input
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          placeholder="Спросите про продажи — например, «план-факт по регионам за квартал»"
+          placeholder="Спросите про продажи или попросите вычисление"
           disabled={busy}
           autoFocus
         />

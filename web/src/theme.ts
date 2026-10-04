@@ -61,6 +61,31 @@ export function metricColor(field: string, mode: Mode, fallbackIndex: number): s
   return slots[slot ?? fallbackIndex % slots.length];
 }
 
+/**
+ * Цвет сущности. Привязан к имени, а не к месту в списке: переключение разреза
+ * или сортировки не должно перекрашивать Центральный регион из синего в
+ * оранжевый — иначе два графика рядом рассказывают разные истории.
+ */
+export function entityColor(name: string, mode: Mode, universe: string[]): string {
+  const slots = CATEGORICAL[mode];
+  const order = [...universe].sort((a, b) => a.localeCompare(b, "ru"));
+  const at = order.indexOf(name);
+  return slots[(at < 0 ? 0 : at) % slots.length];
+}
+
+/** Статусные цвета — только для статуса. Серии их не получают никогда. */
+export function statusColor(status: string): string | undefined {
+  if (status === "neutral") return undefined;
+  return STATUS[status as keyof typeof STATUS];
+}
+
+/** Фон зон пере- и недовыполнения под линией 100%. Намеренно почти незаметный:
+ *  это подложка, а не ещё одна серия. */
+export const ZONE = {
+  good: "rgba(12,163,12,0.05)",
+  bad: "rgba(208,59,59,0.05)",
+} as const;
+
 export function currentMode(): Mode {
   const stamped = document.documentElement.dataset.theme;
   if (stamped === "dark" || stamped === "light") return stamped;
