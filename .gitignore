@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+*.egg-info/
 .ruff_cache/
 .mypy_cache/
 
@@ -15,6 +16,7 @@ venv/
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
 
 # Xcode
 xcuserdata/
@@ -32,3 +34,4 @@ db/data/
 # Данные заказчика не выкладываем в публичный репозиторий.
 # Как получить — db/seed/README.md
 db/seed/*.csv
+.cache/

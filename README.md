@@ -22,6 +22,18 @@ docker exec -e PGPASSWORD=bi_reader puzzle-db \
 
 Пересоздать базу с нуля: `docker compose down -v && docker compose up -d`.
 
+### Приложение
+
+```bash
+cd backend && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/uvicorn app.main:app --port 8000          # API
+.venv/bin/python scripts/warm_cache.py              # прогрев кеша демо-вопросами
+
+cd ../web && npm install && npm run dev             # http://localhost:5173
+```
+
+В `.env` нужен `OPENAI_API_KEY`. Тесты бэкенда — `backend/.venv/bin/pytest`.
+
 ## Структура
 
 | Путь | Что |
@@ -31,8 +43,8 @@ docker exec -e PGPASSWORD=bi_reader puzzle-db \
 | `docs/DATA.md` | Датасет: схема, объёмы, три ловушки |
 | `docs/ARCHITECTURE.md`, `docs/adr/` | Схема и решения с обоснованиями |
 | `db/` | Схема, загрузка, вьюхи, роли, исходные CSV |
-| `backend/` | API, NL-слой, стек вычислений (в работе) |
-| `web/` | Веб-клиент: чат и дашборд (в работе) |
+| `backend/` | API, разбор запросов, сборщик SQL, графики |
+| `web/` | Веб-клиент: чат, график, таблица |
 | `Zura/` | iOS-клиент (в работе) |
 
 ## Данные
