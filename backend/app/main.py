@@ -8,6 +8,7 @@
 import json
 import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
@@ -39,6 +40,7 @@ from app import (
 )
 from app.calculations import CalcError
 from app.config import settings
+from app.gate import PasswordGate
 from app.labels import (
     CHART_LABELS,
     DIMENSION_LABELS,
@@ -95,6 +97,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PasswordGate, password=settings.site_password)
 
 
 def _horizon() -> date:
@@ -986,8 +989,18 @@ def save_dashboard(request: SaveRequest) -> AskResponse:
     return _ok(analysis, f"Сохранил «{analysis.title}».", action="save")
 
 
+def _saved_id(dashboard_id: str) -> str:
+    """Id из ссылки приходит как есть. Битая или обрезанная ссылка — это «не
+    найден», а не падение базы на приведении строки к uuid."""
+    try:
+        return str(uuid.UUID(dashboard_id))
+    except ValueError:
+        raise HTTPException(404, "дашборд не найден — ссылка неполная или устарела") from None
+
+
 @app.get("/api/dashboards/{dashboard_id}/open", response_model=AskResponse)
 def open_dashboard(dashboard_id: str) -> AskResponse:
+    dashboard_id = _saved_id(dashboard_id)
     try:
         title, state = store.load(dashboard_id)
     except KeyError:
@@ -999,12 +1012,14 @@ def open_dashboard(dashboard_id: str) -> AskResponse:
 
 @app.patch("/api/dashboards/{dashboard_id}", response_model=list[SavedDashboard])
 def rename_dashboard(dashboard_id: str, request: RenameRequest) -> list[SavedDashboard]:
+    dashboard_id = _saved_id(dashboard_id)
     store.rename(dashboard_id, request.title.strip())
     return store.listing()
 
 
 @app.post("/api/dashboards/{dashboard_id}/copy", response_model=AskResponse)
 def copy_dashboard(dashboard_id: str) -> AskResponse:
+    dashboard_id = _saved_id(dashboard_id)
     try:
         new_id = store.copy(dashboard_id)
     except KeyError:
@@ -1017,17 +1032,20 @@ def copy_dashboard(dashboard_id: str) -> AskResponse:
 
 @app.delete("/api/dashboards/{dashboard_id}", response_model=list[SavedDashboard])
 def delete_dashboard(dashboard_id: str) -> list[SavedDashboard]:
+    dashboard_id = _saved_id(dashboard_id)
     store.delete(dashboard_id)
     return store.listing()
 
 
 @app.get("/api/dashboards/{dashboard_id}/versions", response_model=list[SavedVersion])
 def dashboard_versions(dashboard_id: str) -> list[SavedVersion]:
+    dashboard_id = _saved_id(dashboard_id)
     return store.versions(dashboard_id)
 
 
 @app.post("/api/dashboards/{dashboard_id}/versions/{version}/open", response_model=AskResponse)
 def open_version(dashboard_id: str, version: int) -> AskResponse:
+    dashboard_id = _saved_id(dashboard_id)
     try:
         title, state = store.load_version(dashboard_id, version)
     except KeyError:
@@ -1089,3 +1107,11 @@ def health() -> dict[str, Any]:
         "cached_questions": planner.cache_size(),
         "sessions": session.count(),
     }
+
+
+# Собранный веб с того же адреса, что и API: одна ссылка, один пароль, без CORS.
+# Монтируется последним — все /api/* уже зарегистрированы и матчатся раньше.
+if settings.web_dist:
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=settings.web_dist, html=True), name="web")

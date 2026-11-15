@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # залипшей клавише выжечь бюджет OpenAI.
     ask_per_minute: int = 30
 
+    # Публичный прототип: пароль на весь сайт и собранный веб с того же адреса.
+    # Пустые — локальный режим: пароля нет, веб отдаёт Vite.
+    site_password: str = ""
+    web_dist: str = ""
+
     @property
     def bi_reader_dsn(self) -> str:
         return (
