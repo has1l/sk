@@ -85,3 +85,34 @@ CREATE VIEW fact_horizon AS
 SELECT max(sale_date) AS last_sale_date,
        date_trunc('month', max(sale_date))::date AS last_full_month
 FROM sales;
+
+
+-- Клиентская ветка: только факт. Плана по клиентам в данных нет — план живёт
+-- на зерне «месяц × точка × продукт», и разложить его по клиентам нечем.
+-- Поэтому здесь своё зерно, «месяц × точка × продукт × клиент × причина
+-- скидки», а plan_* — нули: колонки есть, чтобы таблица сессии имела ту же
+-- форму, но сравнивать с ними нечего, и код это знает (ADR-0009).
+-- Скидка одна на продажу (discounts_sale_idx уникален), поэтому причина —
+-- атрибут продажи, и факт по причинам складывается без двойного счёта.
+CREATE MATERIALIZED VIEW client_fact_flat AS
+SELECT date_trunc('month', s.sale_date)::date AS month,
+       o.outlet_name, o.city, o.outlet_type, r.region_name,
+       p.product_name, p.category,
+       c.client_name, c.segment AS client_segment,
+       coalesce(d.reason, 'Без скидки') AS discount_reason,
+       0::numeric AS plan_amount,
+       0::numeric AS plan_qty,
+       sum(s.amount)   AS fact_amount,
+       sum(s.quantity) AS fact_qty,
+       count(*)        AS sales_count,
+       coalesce(sum(d.discount_amount), 0) AS discount_amount
+FROM sales s
+JOIN outlets  o ON o.outlet_id  = s.outlet_id
+JOIN regions  r ON r.region_id  = o.region_id
+JOIN products p ON p.product_id = s.product_id
+JOIN clients  c ON c.client_id  = s.client_id
+LEFT JOIN discounts d ON d.sale_id = s.sale_id
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10;
+
+CREATE INDEX client_fact_month_idx  ON client_fact_flat (month);
+CREATE INDEX client_fact_client_idx ON client_fact_flat (client_name);
