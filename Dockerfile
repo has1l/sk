@@ -17,7 +17,10 @@ COPY backend/scripts ./scripts
 RUN pip install --no-cache-dir .
 COPY --from=web /web/dist /app/web
 ENV WEB_DIST=/app/web
-RUN useradd --create-home klodik && chown -R klodik /app
+# Папка кеша планировщика создаётся заранее и принадлежит klodik. Прогрев
+# через `railway ssh` идёт от root — запускать его от klodik (см. backend/CLAUDE.md),
+# иначе файл кеша достанется root, и приложение не сможет его дописывать.
+RUN useradd --create-home klodik && mkdir -p /app/backend/.cache && chown -R klodik /app
 USER klodik
 # --proxy-headers: за прокси Railway лимит реплик должен видеть адрес человека,
 # а не прокси — иначе все посетители делят одну минутную квоту.

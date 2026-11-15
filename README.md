@@ -376,7 +376,7 @@ cd web && npm run dev                                          # интерфе�
 
 ```bash
 railway up -s web --ci                                   # собрать и выкатить
-railway ssh -s web -- sh -c "cd /app/backend && python scripts/warm_cache.py"   # прогреть кеш
+railway ssh -s web -- su klodik -s /bin/sh -c "cd /app/backend && python scripts/warm_cache.py"   # прогреть кеш
 ```
 
 На сайте стоит пароль (`SITE_PASSWORD`): браузер покажет окно входа, имя пользователя любое. Без этой переменной пароль не спрашивается — так работает локальный запуск.

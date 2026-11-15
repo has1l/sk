@@ -16,6 +16,7 @@
 
 import hashlib
 import json
+import logging
 import threading
 import uuid
 from datetime import date
@@ -74,8 +75,13 @@ def _load_cache() -> None:
 
 
 def _save_cache() -> None:
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(json.dumps(_cache, ensure_ascii=False, indent=1))
+    # Кеш — ускорение, а не часть ответа. Не записался (нет прав, диск полон) —
+    # ответ всё равно уходит, кеш остаётся в памяти до перезапуска.
+    try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CACHE_PATH.write_text(json.dumps(_cache, ensure_ascii=False, indent=1))
+    except OSError as error:
+        logging.getLogger("puzzle").warning("кеш планировщика не записан: %s", error)
 
 
 def _cache_key(question: str, system: str, context: str) -> str:
