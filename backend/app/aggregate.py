@@ -135,11 +135,14 @@ def grain_of(dimensions: list[Dimension]) -> PeriodGrain | None:
     return None
 
 
-def entity_of(dimensions: list[Dimension]) -> Dimension | None:
-    for dimension in dimensions:
-        if not dimension.is_temporal:
-            return dimension
-    return None
+def entity_of(dimensions: list[Dimension], filters: list[Filter] | None = None) -> Dimension | None:
+    """Основной разрез. Разрез, сведённый фильтром к одному значению, вырожден —
+    «скидки клиента Х по клиентам» дают круг из одного куска. Если в заказе
+    есть другой разрез, основным становится он: «по клиенту Х, какие скидки и
+    почему» — это разрез по причинам скидок, а не по клиентам."""
+    entities = [d for d in dimensions if not d.is_temporal]
+    pinned = {f.dimension for f in filters or [] if len(f.values) == 1}
+    return next((d for d in entities if d not in pinned), entities[0] if entities else None)
 
 
 def bounds(frame: pd.DataFrame) -> tuple[date | None, date | None]:

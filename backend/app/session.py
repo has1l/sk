@@ -140,7 +140,7 @@ _lock = Lock()
 
 
 def default_view(spec: QuerySpec, date_from: date | None, date_to: date | None) -> ViewState:
-    primary = aggregate.entity_of(spec.dimensions) or Dimension.REGION
+    primary = aggregate.entity_of(spec.dimensions, spec.filters) or Dimension.REGION
     grain = aggregate.grain_of(spec.dimensions) or PeriodGrain.MONTH
     metric = next(
         (m for m in spec.metrics if m is not Metric.PLAN_AMOUNT),

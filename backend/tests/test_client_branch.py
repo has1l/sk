@@ -123,3 +123,16 @@ def test_client_summary_names_the_main_discount_reason_and_says_there_is_no_plan
     assert "Плана по клиентам" in text
     assert "лояльность клиента" in text
     assert "план выполнен" not in text
+
+
+def test_dimension_pinned_to_one_value_does_not_become_the_main_breakdown():
+    from app.aggregate import entity_of
+    from app.schema import Dimension, Filter
+
+    one_client = [Filter(dimension=Dimension.CLIENT, values=["ООО «Вектор»"])]
+    dims = [Dimension.CLIENT, Dimension.DISCOUNT_REASON]
+    assert entity_of(dims, one_client) is Dimension.DISCOUNT_REASON
+    assert entity_of(dims) is Dimension.CLIENT
+    assert entity_of([Dimension.CLIENT], one_client) is Dimension.CLIENT
+    two_clients = [Filter(dimension=Dimension.CLIENT, values=["А", "Б"])]
+    assert entity_of(dims, two_clients) is Dimension.CLIENT

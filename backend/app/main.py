@@ -7,6 +7,7 @@
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -310,8 +311,22 @@ def _new_query(request: AskRequest, plan, current, horizon) -> AskResponse:
     return _ok(analysis, lines[0] if lines else "Готово.")
 
 
+def _crosses_branch(spec: QuerySpec, frame) -> bool:
+    """Уточнение уводит с план-факта на клиентскую ветку или обратно.
+
+    Это уже другой вопрос, а не правка прежнего: вычисления от плана
+    («процент выполнения») на клиентской выборке бессмысленны, а разрез и
+    раскладка прежнего дашборда рисовали «выполнение плана по клиентам»."""
+    wants_fact_only = any(d.is_fact_only for d in spec.dimensions) or any(
+        f.dimension.is_fact_only for f in spec.filters
+    )
+    return wants_fact_only != aggregate.is_fact_only(frame)
+
+
 def _refine(request: AskRequest, plan, current: Analysis, horizon) -> AskResponse:
     spec = _fit_spec(plan.to_spec())
+    if _crosses_branch(spec, current.frame):
+        return _new_query(request, plan, current, horizon)
     requested = list(spec.filters)
     spec.filters, notes = planner.resolve_filters(spec.filters)
     if (refused := _not_found(requested, spec.filters, notes)) is not None:
@@ -495,7 +510,20 @@ def _calculate(request: AskRequest, plan, current: Analysis, horizon) -> AskResp
     )
 
 
+_NAMES_A_CALCULATION = re.compile(r"вычислен|колонк|формул|расч[её]т", re.IGNORECASE)
+
+
 def _undo(request: AskRequest, plan, current: Analysis, horizon) -> AskResponse:
+    # «Отмени последнее вычисление» после «отсортируй график» — человек просит
+    # убрать колонку, а не откатить сортировку. Общий откат снимает последний
+    # шаг любого рода, поэтому названное вычисление снимается адресно.
+    if current.steps and _NAMES_A_CALCULATION.search(request.question):
+        step = current.steps[-1]
+        title = calculations.step_title(step)
+        current.checkpoint(f"удаление «{title}»")
+        current.steps = current.steps[:-1]
+        current.dirty = True
+        return _ok(current, f"Убрал вычисление «{title}».", action="undo")
     label = current.undo()
     if label is None:
         return _ok(current, "Отменять нечего — это исходное состояние.")

@@ -83,7 +83,7 @@ def title_for(spec: QuerySpec, view: ViewState) -> str:
     else:
         subject = "Продажи"
 
-    entity = aggregate.entity_of(spec.dimensions)
+    entity = aggregate.entity_of(spec.dimensions, spec.filters)
     where = f" по {genitive(entity)}" if entity else ""
     window = numbers.range_label(view.date_from, view.date_to)
     return f"{subject}{where}, {window}"
