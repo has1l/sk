@@ -1,6 +1,16 @@
-# Секреты
+# Секреты. Любой .env.* — тоже: ключ OpenAI живёт только на сервере.
 .env
-.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Личные настройки агента — у каждого свои
+.claude/settings.local.json
+.claude/worktrees/
+
+# Логи
+*.log
 
 # Python
 __pycache__/
