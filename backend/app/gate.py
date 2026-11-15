@@ -17,12 +17,13 @@ import hmac
 import html
 import time
 from collections import defaultdict, deque
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 COOKIE = "klodik_pass"
 LOGIN_PATH = "/login"
+PREFILL = "pass"
 OPEN_PATHS = {"/api/health", "/favicon.svg"}
 OPEN_PREFIXES = ("/fonts/",)
 MAX_BODY = 4096
@@ -80,9 +81,11 @@ class PasswordGate:
         if path.startswith("/api/"):
             await _send(send, 401, "application/json", '{"detail":"Нужен пароль"}')
             return
-        query = scope.get("query_string", b"").decode("latin-1")
+        params = parse_qs(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+        prefill = params.pop(PREFILL, [""])[0][:200]
+        query = urlencode(params, doseq=True)
         target = path + (f"?{query}" if query else "")
-        await _send(send, 401, "text/html", login_page(_safe_next(target)))
+        await _send(send, 401, "text/html", login_page(_safe_next(target), prefill=prefill))
 
     async def _login(self, scope: Scope, receive: Receive, send: Send) -> None:
         body = b""
@@ -149,7 +152,17 @@ PET = """<svg viewBox="0 0 56 56" width="64" height="64" shape-rendering="crispE
 <rect x="32" y="23" width="3" height="4"/></g></svg>"""
 
 
-def login_page(target: str, error: str = "") -> str:
+def login_page(target: str, error: str = "", prefill: str = "") -> str:
+    """prefill — пароль из ссылки QR-кода на слайде защиты: поле уже заполнено,
+    остаётся нажать «Войти». Сам вход всё равно идёт через форму."""
+    value = f' value="{html.escape(prefill)}"' if prefill else ""
+    focus = "" if prefill else " autofocus"
+    lead = (
+        "Пароль уже подставлен — нажмите «Войти»"
+        if prefill
+        else "Аналитика продаж в чате. Прототип закрыт паролем — его выдаёт команда"
+    )
+    button_focus = " autofocus" if prefill else ""
     alert = f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="ru">
@@ -203,12 +216,12 @@ button:focus-visible{{outline:none;box-shadow:0 0 0 4px var(--accent-ring)}}
 <main>
 <span class="pet">{PET}</span>
 <h1>Клодик</h1>
-<p class="lead">Аналитика продаж в чате. Прототип закрыт паролем — его выдаёт команда</p>
+<p class="lead">{lead}</p>
 <form method="post" action="{LOGIN_PATH}">
 <input type="hidden" name="next" value="{html.escape(target)}">
 <label for="password">Пароль</label>
-<input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
-<button type="submit">Войти</button>
+<input id="password" name="password" type="password" autocomplete="current-password" required{value}{focus}>
+<button type="submit"{button_focus}>Войти</button>
 {alert}
 </form>
 <p class="hint">Вход запоминается на этом устройстве на 30 дней</p>

@@ -83,3 +83,17 @@ def test_health_fonts_and_icon_stay_open():
 
 def test_empty_password_leaves_local_mode_open():
     assert _client("").get("/api/templates").status_code == 200
+
+
+def test_link_from_qr_prefills_the_password_and_waits_for_the_button():
+    response = _client("sekret").get("/?pass=sekret&dashboard=abc")
+    assert response.status_code == 401
+    assert 'name="password"' in response.text
+    assert 'value="sekret"' in response.text
+    assert 'value="/?dashboard=abc"' in response.text
+    assert "set-cookie" not in response.headers
+
+
+def test_prefilled_value_is_escaped():
+    response = _client("sekret").get('/?pass="><script>x</script>')
+    assert "<script>x</script>" not in response.text
