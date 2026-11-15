@@ -112,3 +112,11 @@ def test_quarter_boundaries():
     assert sql_builder._quarter_start(date(2026, 1, 15)) == date(2026, 1, 1)
     assert sql_builder._quarter_start(date(2026, 5, 1)) == date(2026, 4, 1)
     assert sql_builder._quarter_start(date(2026, 12, 31)) == date(2026, 10, 1)
+
+
+def test_last_three_years_are_thirty_six_months_up_to_the_horizon():
+    """Модель на «последние 3 года» отдавала октябрь 2024 — два года. Теперь
+    она называет число месяцев, а границы считает код."""
+    start, end, notes = sql_builder.resolve_period(Period(last_months=36), date(2026, 9, 1))
+    assert (start, end) == (date(2023, 10, 1), date(2026, 9, 1))
+    assert notes

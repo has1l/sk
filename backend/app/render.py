@@ -9,11 +9,21 @@ from __future__ import annotations
 
 from datetime import date
 
-from app import aggregate, calculations, dashboard, insights, numbers
+from app import aggregate, calculations, dashboard, diagnose, insights, numbers
 from app.calculations import Context
 from app.config import settings
 from app.labels import DIMENSION_LABELS, GRAIN_LABELS, METRIC_LABELS, genitive
-from app.schema import Metric, QuerySpec, SessionView, StepView, ViewState
+from app.schema import (
+    CalcStep,
+    Formula,
+    Metric,
+    Provenance,
+    QuerySpec,
+    SessionView,
+    StepView,
+    TimelineEntry,
+    ViewState,
+)
 from app.session import Analysis
 
 
@@ -85,6 +95,12 @@ def build(analysis: Analysis, horizon: date, message: str = "") -> SessionView:
         analysis.frame, analysis.view, analysis.steps, analysis.config
     )
     lines = insights.build(analysis.frame, analysis.view, horizon)
+    scope = aggregate.window(analysis.frame, analysis.view)
+
+    # Первая строка выводов — это и есть ответ: она уходит репликой в чат и
+    # повторяется карточками KPI. В списке выводов ей делать нечего.
+    summary = lines[0] if lines else ""
+    rest = lines[1:]
 
     notes = list(dict.fromkeys([*analysis.notes, *step_notes, *board_notes]))
     return SessionView(
@@ -93,15 +109,102 @@ def build(analysis: Analysis, horizon: date, message: str = "") -> SessionView:
         question=analysis.question,
         spec=analysis.spec,
         view=analysis.view,
+        recipe=analysis.state(),
         steps=step_views(analysis),
         table=table,
         dashboard=board,
-        insights=lines,
+        summary=summary,
+        insights=rest,
+        anomalies=diagnose.anomalies(scope, analysis.view),
+        decomposition=diagnose.decompose(scope, analysis.view),
+        provenance=provenance(analysis, table.row_count),
+        timeline=timeline(analysis),
         notes=notes,
         sql=analysis.sql,
         saved_id=analysis.saved_id,
         dirty=analysis.dirty,
     )
+
+
+GUARANTEES = [
+    "Модель не писала этот SQL: запрос собран кодом из закрытого списка полей (ADR-0004).",
+    "Значения из реплики уехали параметрами запроса, а не текстом внутри него.",
+    "Роль bi_reader: только SELECT, транзакция read-only, таймаут 10 с.",
+    "Формулы разобраны в дерево операций и посчитаны pandas — eval не вызывается нигде.",
+    "Отношения считаются после группировки: процент от суммы, а не сумма процентов.",
+]
+
+
+def provenance(analysis: Analysis, row_count: int) -> Provenance:
+    """Происхождение каждой цифры на экране.
+
+    Нужна не для отладки: граница безопасности, описанная в ADR-0004, иначе
+    остаётся обещанием в документе, которое на защите нечем показать.
+    """
+    formulas = [_formula(step, "по просьбе") for step in analysis.steps]
+    formulas += [_formula(step, "своё") for step in dashboard.builtin_steps()]
+    return Provenance(
+        sql=analysis.sql or None,
+        role="bi_reader",
+        statement_timeout="10s",
+        read_only=True,
+        row_count=int(len(analysis.frame)),
+        load_ms=round(analysis.load_ms, 1),
+        model=settings.openai_model,
+        llm_calls=analysis.llm_calls,
+        formulas=formulas,
+        guarantees=GUARANTEES,
+    )
+
+
+def _formula(step: CalcStep, origin: str) -> Formula:
+    return Formula(
+        field=step.field,
+        title=calculations.step_title(step),
+        kind=origin,
+        expression=calculations.formula_text(step),
+        inputs=[calculations.field_label(f) for f in step.source],
+    )
+
+
+def timeline(analysis: Analysis) -> list[TimelineEntry]:
+    """Лента возвратов: каждая правка оставила состояние, к которому можно
+    вернуться. Последняя запись — то, что на экране сейчас.
+    """
+    # Снимок делается ПЕРЕД правкой, поэтому возврат к нему отменяет её.
+    # Подпись обязана говорить об этом: «вычисление …» прочиталось бы как
+    # состояние с вычислением, а там его как раз нет.
+    out = [
+        TimelineEntry(
+            id=snapshot.id,
+            label=f"до: {snapshot.label}",
+            at=snapshot.at,
+            summary=_state_summary(snapshot.steps, snapshot.view),
+        )
+        for snapshot in analysis.history
+    ]
+    out.append(
+        TimelineEntry(
+            id="current",
+            label="сейчас",
+            at=analysis.touched_at,
+            summary=_state_summary(analysis.steps, analysis.view),
+            current=True,
+        )
+    )
+    return out
+
+
+def _state_summary(steps: list[CalcStep], view: ViewState) -> str:
+    parts = [DIMENSION_LABELS[view.primary], GRAIN_LABELS[view.period_grain].lower()]
+    if steps:
+        parts.append(f"вычислений: {len(steps)}")
+    if view.filters:
+        applied = ", ".join(
+            f"{DIMENSION_LABELS[f.dimension].lower()} — {len(f.values)}" for f in view.filters
+        )
+        parts.append(f"фильтры: {applied}")
+    return " · ".join(parts)
 
 
 def describe(analysis: Analysis) -> str:

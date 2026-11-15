@@ -35,6 +35,25 @@ DEFAULT_SOURCES: dict[StepKind, list[str]] = {
     StepKind.GROWTH: [Metric.FACT_AMOUNT.value],
     StepKind.CUMULATIVE: [Metric.FACT_AMOUNT.value],
     StepKind.RANK: [Metric.FACT_AMOUNT.value],
+    StepKind.MEAN: [Metric.FACT_AMOUNT.value],
+    StepKind.MEDIAN: [Metric.FACT_AMOUNT.value],
+    StepKind.MIN: [Metric.FACT_AMOUNT.value],
+    StepKind.MAX: [Metric.FACT_AMOUNT.value],
+}
+
+# Статистики по группе. Единица у них — единица источника, а не своя:
+# среднее рублей — рубли, среднее штук — штуки.
+STATS: dict[StepKind, str] = {
+    StepKind.MEAN: "mean",
+    StepKind.MEDIAN: "median",
+    StepKind.MIN: "min",
+    StepKind.MAX: "max",
+}
+STAT_WORDS: dict[StepKind, str] = {
+    StepKind.MEAN: "среднее",
+    StepKind.MEDIAN: "медиана",
+    StepKind.MIN: "минимум",
+    StepKind.MAX: "максимум",
 }
 
 STEP_UNITS: dict[StepKind, Unit] = {
@@ -44,6 +63,10 @@ STEP_UNITS: dict[StepKind, Unit] = {
     StepKind.GROWTH: "percent",
     StepKind.CUMULATIVE: "rub",
     StepKind.RANK: "rank",
+    StepKind.MEAN: "rub",
+    StepKind.MEDIAN: "rub",
+    StepKind.MIN: "rub",
+    StepKind.MAX: "rub",
     StepKind.ARITHMETIC: "none",
 }
 
@@ -156,6 +179,8 @@ def formula_text(step: CalcStep) -> str:
             return f"накопление {source[0]} по периодам"
         case StepKind.RANK:
             return f"место по {source[0]}"
+        case kind if kind in STATS:
+            return f"{STAT_WORDS[kind]} {source[0]} по периодам внутри каждой группы"
         case _:
             return step.expression or ""
 
@@ -236,7 +261,7 @@ def evaluate(expression: str, frame: pd.DataFrame) -> pd.Series:
             stack.append(ones * float(value))
         elif kind == "name":
             if value not in frame.columns:
-                known = ", ".join(c for c in frame.columns if c in ADDITIVE)
+                known = ", ".join(field_label(c) for c in frame.columns if c in ADDITIVE)
                 raise CalcError(f"в таблице нет колонки «{value}». Есть: {known}")
             stack.append(pd.to_numeric(frame[value], errors="coerce").astype("float64"))
         elif value == "u-":
@@ -312,6 +337,8 @@ def _compute(frame: pd.DataFrame, step: CalcStep, context: Context) -> pd.Series
         case StepKind.RANK:
             ascending = step.order is SortOrder.ASC
             return _numeric(frame, source[0]).rank(ascending=ascending, method="min")
+        case kind if kind in STATS:
+            return _group_stat(frame, context, source[0], STATS[kind])
     raise CalcError(f"неизвестный тип шага: {step.kind}")
 
 
@@ -344,3 +371,18 @@ def _ordered(frame: pd.DataFrame, context: Context, field: str, what: str) -> pd
 
     result = shifted.reindex(frame.index)
     return result.replace([np.inf, -np.inf], np.nan)
+
+
+def _group_stat(frame: pd.DataFrame, context: Context, field: str, stat: str) -> pd.Series:
+    """Среднее, медиана, минимум, максимум внутри каждой группы.
+
+    Группа — сущностные разрезы таблицы, значения внутри неё — периоды:
+    «среднее факта по региону» это среднемесячный факт региона. Без
+    сущностных разрезов считаем по всей колонке — одна строка на группу дала
+    бы статистику, равную самому значению, то есть ничего.
+    """
+    values = _numeric(frame, field)
+    groups = [g for g in (context.group_fields or []) if g in frame.columns]
+    if groups:
+        return values.groupby([frame[g] for g in groups], sort=False).transform(stat)
+    return pd.Series(getattr(values, stat)(), index=frame.index, dtype="float64")

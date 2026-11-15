@@ -112,6 +112,9 @@ def to_html(view: SessionView) -> str:
         )
 
     insights = "".join(f"<li>{html.escape(line)}</li>" for line in view.insights)
+    alerts = "".join(
+        f'<li class="alert {a.severity}">{html.escape(a.text)}</li>' for a in view.anomalies
+    )
     notes = "".join(f'<p class="note">{html.escape(line)}</p>' for line in view.notes)
     filters = ", ".join(
         f"{option.label}: {', '.join(option.selected)}"
@@ -157,15 +160,22 @@ def to_html(view: SessionView) -> str:
            padding-left:10px; margin:8px 0 0; }}
   ul {{ margin:0 0 24px; padding-left:20px; color:var(--ink2); }}
   li {{ margin-bottom:6px; }}
+  .lead {{ font-size:15px; color:var(--ink); margin:0 0 16px; font-weight:550; }}
+  .alert {{ color:var(--ink); }}
+  .alert.high::marker {{ color:var(--critical); }}
+  .alert.medium::marker {{ color:var(--warning); }}
+  .alerts-title {{ font-size:13px; color:var(--muted); margin:0 0 6px; }}
 </style>
 <div class="wrap">
   <h1>{html.escape(view.title)}</h1>
   <p class="sub">{html.escape(view.question)}</p>
   <div class="kpis">{_kpi_html(view.dashboard)}</div>
+  {f'<p class="lead">{html.escape(view.summary)}</p>' if view.summary else ""}
   {f"<ul>{insights}</ul>" if insights else ""}
+  {f'<p class="alerts-title">На что обратить внимание</p><ul>{alerts}</ul>' if alerts else ""}
   {notes}
   {f'<p class="note">Фильтры: {html.escape(filters)}</p>' if filters else ""}
   {"".join(panels)}
-  <p class="note">Выгружено {datetime.now():%d.%m.%Y %H:%M}. Данные — тестовый датасет кейса Puzzle RPA.</p>
+  <p class="note">Выгружено из Клодика {datetime.now():%d.%m.%Y %H:%M}. Данные — тестовый датасет кейса Puzzle RPA.</p>
 </div>
 </html>"""

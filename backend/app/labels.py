@@ -14,6 +14,9 @@ DIMENSION_LABELS: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "Тип точки",
     Dimension.PRODUCT: "Продукт",
     Dimension.CATEGORY: "Категория",
+    Dimension.CLIENT: "Клиент",
+    Dimension.CLIENT_SEGMENT: "Сегмент клиента",
+    Dimension.DISCOUNT_REASON: "Причина скидки",
 }
 
 METRIC_LABELS: dict[Metric, str] = {
@@ -62,6 +65,10 @@ STEP_LABELS: dict[StepKind, str] = {
     StepKind.GROWTH: "Динамика к прошлому периоду",
     StepKind.CUMULATIVE: "Накопительный итог",
     StepKind.RANK: "Ранг",
+    StepKind.MEAN: "Среднее",
+    StepKind.MEDIAN: "Медиана",
+    StepKind.MIN: "Минимум",
+    StepKind.MAX: "Максимум",
     StepKind.ARITHMETIC: "Произвольная формула",
 }
 
@@ -85,6 +92,9 @@ GENITIVE: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "типам точек",
     Dimension.PRODUCT: "продуктам",
     Dimension.CATEGORY: "категориям",
+    Dimension.CLIENT: "клиентам",
+    Dimension.CLIENT_SEGMENT: "сегментам клиентов",
+    Dimension.DISCOUNT_REASON: "причинам скидок",
 }
 
 # Единственное число в предложном падеже: «в Центральном регионе» не собрать
@@ -96,9 +106,30 @@ SINGULAR: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "тип точки",
     Dimension.PRODUCT: "продукт",
     Dimension.CATEGORY: "категория",
+    Dimension.CLIENT: "клиент",
+    Dimension.CLIENT_SEGMENT: "сегмент",
+    Dimension.DISCOUNT_REASON: "причина скидки",
     Dimension.MONTH: "месяц",
     Dimension.QUARTER: "квартал",
     Dimension.YEAR: "год",
+}
+
+
+# «По всем …» — дательный множественного. Подпись разреза в единственном
+# числе давала «все торговая точка в сумме вырос».
+ACROSS_ALL: dict[Dimension, str] = {
+    Dimension.REGION: "по всем регионам",
+    Dimension.OUTLET: "по всем торговым точкам",
+    Dimension.CITY: "по всем городам",
+    Dimension.OUTLET_TYPE: "по всем типам точек",
+    Dimension.PRODUCT: "по всем продуктам",
+    Dimension.CATEGORY: "по всем категориям",
+    Dimension.CLIENT: "по всем клиентам",
+    Dimension.CLIENT_SEGMENT: "по всем сегментам",
+    Dimension.DISCOUNT_REASON: "по всем причинам скидок",
+    Dimension.MONTH: "по всем месяцам",
+    Dimension.QUARTER: "по всем кварталам",
+    Dimension.YEAR: "по всем годам",
 }
 
 
@@ -111,6 +142,9 @@ BEST: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "Лучший тип точки",
     Dimension.PRODUCT: "Лучший продукт",
     Dimension.CATEGORY: "Лучшая категория",
+    Dimension.CLIENT: "Лучший клиент",
+    Dimension.CLIENT_SEGMENT: "Лучший сегмент",
+    Dimension.DISCOUNT_REASON: "Лучшая причина скидки",
     Dimension.MONTH: "Лучший месяц",
     Dimension.QUARTER: "Лучший квартал",
     Dimension.YEAR: "Лучший год",
@@ -123,9 +157,44 @@ WORST: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "худший",
     Dimension.PRODUCT: "худший",
     Dimension.CATEGORY: "худшая",
+    Dimension.CLIENT: "худший",
+    Dimension.CLIENT_SEGMENT: "худший",
+    Dimension.DISCOUNT_REASON: "худшая",
     Dimension.MONTH: "худший",
     Dimension.QUARTER: "худший",
     Dimension.YEAR: "худший",
+}
+
+
+INTENT_LABELS: dict[str, str] = {
+    "new_query": "новый вопрос",
+    "refine": "правка выборки",
+    "filter": "фильтр",
+    "toggle": "переключатель",
+    "calculate": "вычисление",
+    "undo": "отмена",
+    "show_table": "показать таблицу",
+    "chart": "настройка графика",
+    "explain": "выводы",
+    "why": "разбор причин",
+    "save": "сохранение",
+    "list_saved": "список дашбордов",
+    "open_saved": "открыть дашборд",
+    "rename": "переименование",
+    "copy": "копия",
+    "delete": "удаление дашборда",
+    "ui_help": "подсказка по интерфейсу",
+    "out_of_scope": "за границей возможностей",
+}
+
+
+#: Виды графика, доступные своей панели. Водопад сюда не входит: он не
+#: «вид графика», а мост от плана к факту, и собирается разбором причин.
+CHART_LABELS: dict[str, str] = {
+    "bar": "Столбцы",
+    "hbar": "Полосы",
+    "line": "Линия",
+    "pie": "Круг",
 }
 
 

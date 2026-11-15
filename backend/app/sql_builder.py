@@ -4,8 +4,10 @@
 таблиц ниже, значения уезжают параметрами — поэтому ни инъекция, ни запись
 невозможны по конструкции, а не по договорённости (ADR-0004).
 
-Источник всегда один — вьюха plan_fact_flat. В ней уже закрыты обе ловушки
-джойна плана с фактом, так что собрать неправильный запрос нельзя.
+Источников два. Основной — plan_fact_flat: в ней закрыты обе ловушки джойна
+плана с фактом. Клиентская ветка — client_fact_flat: факт на зерне клиента и
+причины скидки, плана в ней нет, потому что плана по клиентам не существует.
+Выбирает источник код по разрезам и фильтрам спецификации, а не модель.
 """
 
 from dataclasses import dataclass, field
@@ -24,7 +26,22 @@ DIMENSION_SQL: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "outlet_type",
     Dimension.PRODUCT: "product_name",
     Dimension.CATEGORY: "category",
+    Dimension.CLIENT: "client_name",
+    Dimension.CLIENT_SEGMENT: "client_segment",
+    Dimension.DISCOUNT_REASON: "discount_reason",
 }
+
+MAIN_SOURCE = "plan_fact_flat"
+CLIENT_SOURCE = "client_fact_flat"
+
+
+def needs_client_branch(spec: QuerySpec) -> bool:
+    used = [*spec.dimensions, *(f.dimension for f in spec.filters)]
+    return any(d.is_fact_only for d in used)
+
+
+def source_for(spec: QuerySpec) -> str:
+    return CLIENT_SOURCE if needs_client_branch(spec) else MAIN_SOURCE
 
 METRIC_SQL: dict[Metric, str] = {
     Metric.PLAN_AMOUNT: "sum(plan_amount)",
@@ -69,6 +86,14 @@ def resolve_period(period: Period, horizon_month: date) -> tuple[date | None, da
 
     if period.date_from or period.date_to:
         return period.date_from, period.date_to, notes
+
+    if period.last_months:
+        start = _shift_months(horizon_month, -(period.last_months - 1))
+        notes.append(
+            f"«Последние {period.last_months} мес.» — это {start:%m.%Y}–{horizon_month:%m.%Y}, "
+            "считая от последнего месяца с фактом."
+        )
+        return start, horizon_month, notes
 
     match period.relative:
         case RelativePeriod.LAST_MONTH:
@@ -123,7 +148,7 @@ def build(spec: QuerySpec, horizon_month: date) -> BuiltQuery:
         where_parts.append(f"{column} = ANY(%s)")
         params.append(flt.values)
 
-    sql = f"SELECT {', '.join(select_parts)}\nFROM plan_fact_flat"
+    sql = f"SELECT {', '.join(select_parts)}\nFROM {source_for(spec)}"
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)
     if group_parts:
@@ -153,11 +178,21 @@ DETAIL_COLUMNS: list[str] = [
     "category",
 ]
 
+CLIENT_DETAIL_COLUMNS: list[str] = ["client_name", "client_segment", "discount_reason"]
+
 DETAIL_METRICS: list[Metric] = list(Metric)
 
 # client_count в детальной таблице отсутствует намеренно: это count(distinct),
 # складывать его нельзя, а в pandas число активных клиентов всё равно не
 # восстановить из суммы. Активные точки и продукты считаются по атрибутам.
+
+
+def detail_columns(spec: QuerySpec) -> list[str]:
+    """Колонки таблицы сессии. У клиентской ветки их больше — и это
+    единственный список: таблица, собранная по другому, молча теряла бы
+    клиента, а дальше всё падало бы на группировке по нему."""
+    attributes = DETAIL_COLUMNS + (CLIENT_DETAIL_COLUMNS if needs_client_branch(spec) else [])
+    return attributes + [m.value for m in DETAIL_METRICS]
 
 
 def build_detail(
@@ -175,10 +210,13 @@ def build_detail(
     notes += period_notes
 
     if spec.clip_to_fact_horizon and (date_to is None or date_to > horizon_month):
-        notes.append(
-            f"План обрезан по {horizon_month:%m.%Y} — дальше факта ещё нет, "
-            "иначе выполнение выглядело бы заниженным."
-        )
+        # В клиентской ветке плана нет, и обрезать нечего — фраза про план
+        # там только сбивала бы с толку. Граница при этом та же.
+        if not needs_client_branch(spec):
+            notes.append(
+                f"План обрезан по {horizon_month:%m.%Y} — дальше факта ещё нет, "
+                "иначе выполнение выглядело бы заниженным."
+            )
         date_to = horizon_month
 
     where_parts: list[str] = []
@@ -196,8 +234,14 @@ def build_detail(
         where_parts.append(f"{column} = ANY(%s)")
         params.append(flt.values)
 
-    columns = ", ".join(DETAIL_COLUMNS + [m.value for m in DETAIL_METRICS])
-    sql = f"SELECT {columns}\nFROM plan_fact_flat"
+    source = source_for(spec)
+    columns = ", ".join(detail_columns(spec))
+    sql = f"SELECT {columns}\nFROM {source}"
+    if source == CLIENT_SOURCE:
+        notes.append(
+            "Плана по клиентам в данных нет — он ставится на точку и продукт. "
+            "Здесь только факт: продажи, скидки и сделки."
+        )
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)
     sql += f"\nLIMIT {settings.detail_row_limit}"
@@ -221,7 +265,8 @@ def filter_values(dimension: Dimension, narrow: list[Filter]) -> BuiltQuery:
         where_parts.append(f"{other} = ANY(%s)")
         params.append(flt.values)
 
-    sql = f"SELECT DISTINCT {column} AS value\nFROM plan_fact_flat"
+    source = CLIENT_SOURCE if dimension.is_fact_only else MAIN_SOURCE
+    sql = f"SELECT DISTINCT {column} AS value\nFROM {source}"
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)
     sql += "\nORDER BY value"

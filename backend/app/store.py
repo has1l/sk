@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -104,13 +105,9 @@ def listing(query: str | None = None, sort: str = "updated") -> list[SavedDashbo
         SELECT dashboard_id, title, question, version, created_at, updated_at
         FROM app.dashboards
     """
-    params: list[Any] = []
-    if query:
-        sql += " WHERE title ILIKE %s OR question ILIKE %s"
-        params += [f"%{query}%", f"%{query}%"]
     sql += f" ORDER BY {order} LIMIT 200"
 
-    return [
+    items = [
         SavedDashboard(
             id=str(row["dashboard_id"]),
             title=row["title"],
@@ -119,8 +116,34 @@ def listing(query: str | None = None, sort: str = "updated") -> list[SavedDashbo
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
-        for row in db.app_query(sql, params)
+        for row in db.app_query(sql, [])
     ]
+    if not query:
+        return items
+    return [item for item in items if matches(query, f"{item.title} {item.question}")]
+
+
+# Слова, которыми человек называет сам поиск, а не его предмет: «найди
+# дашборд про скидки». Требование совпасть всем словам иначе обнулило бы его.
+_SEARCH_FILLER = {
+    "про", "дашборд", "дашборда", "дашборды", "дашбордов", "отчёт", "отчет",
+    "мой", "мои", "мою", "где", "был", "была", "было", "который", "которые",
+}
+
+
+def matches(query: str, text: str) -> bool:
+    """Все слова запроса есть в тексте — целиком или без двух последних
+    букв: «про скидки» находит «какие скидки делались» и «по скидкам».
+    ILIKE по всей фразе здесь не годится — «скидки» не найдёт «скидок».
+    """
+    haystack = text.casefold()
+    words = [
+        w for w in re.split(r"\W+", query.casefold(), flags=re.UNICODE)
+        if len(w) >= 3 and w not in _SEARCH_FILLER
+    ]
+    if not words:
+        return True
+    return all(w in haystack or (len(w) >= 5 and w[:-2] in haystack) for w in words)
 
 
 def load(dashboard_id: str) -> tuple[str, dict[str, Any]]:

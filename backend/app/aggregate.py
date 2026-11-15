@@ -27,6 +27,9 @@ FIELD: dict[Dimension, str] = {
     Dimension.OUTLET_TYPE: "outlet_type",
     Dimension.PRODUCT: "product_name",
     Dimension.CATEGORY: "category",
+    Dimension.CLIENT: "client_name",
+    Dimension.CLIENT_SEGMENT: "client_segment",
+    Dimension.DISCOUNT_REASON: "discount_reason",
 }
 
 ENTITY_DIMENSIONS: list[Dimension] = [d for d in Dimension if not d.is_temporal]
@@ -36,7 +39,13 @@ CASCADE: dict[Dimension, Dimension] = {
     Dimension.OUTLET: Dimension.REGION,
     Dimension.CITY: Dimension.REGION,
     Dimension.PRODUCT: Dimension.CATEGORY,
+    Dimension.CLIENT: Dimension.CLIENT_SEGMENT,
 }
+
+
+def is_fact_only(frame: pd.DataFrame) -> bool:
+    """Таблица клиентской ветки: факта на зерне клиента, плана в ней нет."""
+    return "client_name" in frame.columns
 
 
 def prepare(frame: pd.DataFrame) -> pd.DataFrame:
@@ -108,13 +117,14 @@ def distinct_counts(frame: pd.DataFrame) -> dict[str, int]:
     строки, где есть только план: 11 711 ключей плана без единой продажи.
     """
     if not len(frame):
-        return {"outlets": 0, "products": 0, "cities": 0, "regions": 0}
+        return {"outlets": 0, "products": 0, "cities": 0, "regions": 0, "clients": 0}
     sold = frame[frame["fact_amount"] > 0]
     return {
         "outlets": int(sold["outlet_name"].nunique()),
         "products": int(sold["product_name"].nunique()),
         "cities": int(sold["city"].nunique()),
         "regions": int(sold["region_name"].nunique()),
+        "clients": int(sold["client_name"].nunique()) if "client_name" in sold.columns else 0,
     }
 
 

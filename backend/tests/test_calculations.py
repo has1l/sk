@@ -181,3 +181,38 @@ def test_unpaired_kinds_keep_their_source_untouched():
     from app.calculations import normalize_source
 
     assert normalize_source(StepKind.SHARE, ["plan_amount"]) == ["plan_amount"]
+
+
+# ─── статистики по группе ─────────────────────────────────────────────────────
+
+
+def test_mean_is_taken_over_periods_inside_each_entity(months):
+    """«Среднее факта по региону» — среднемесячный факт каждого региона,
+    а не одно число на всю таблицу."""
+    ctx = Context(period_field="month", group_fields=["region"])
+    out = apply(months, [step(StepKind.MEAN, "avg")], ctx)
+    assert list(out["avg"]) == [125.0, 125.0, 150.0, 150.0]
+
+
+def test_median_min_max_inside_each_entity(months):
+    ctx = Context(period_field="month", group_fields=["region"])
+    out = apply(
+        months,
+        [step(StepKind.MEDIAN, "med"), step(StepKind.MIN, "lo"), step(StepKind.MAX, "hi")],
+        ctx,
+    )
+    assert list(out["lo"]) == [100.0, 100.0, 100.0, 100.0]
+    assert list(out["hi"]) == [150.0, 150.0, 200.0, 200.0]
+    assert list(out["med"]) == [125.0, 125.0, 150.0, 150.0]
+
+
+def test_stat_without_entity_groups_spans_the_whole_table(regions):
+    out = apply(regions, [step(StepKind.MEDIAN, "med")], Context())
+    assert list(out["med"]) == [90.0, 90.0, 90.0]
+
+
+def test_unknown_column_error_names_columns_in_russian(regions):
+    with pytest.raises(CalcError) as error:
+        evaluate("AVG(fact_amount)", regions)
+    assert "fact_amount" not in str(error.value)
+    assert "Факт" in str(error.value)

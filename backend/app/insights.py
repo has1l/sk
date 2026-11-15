@@ -37,6 +37,13 @@ def build(
             "ни одна строка под условия не попала."
         ]
 
+    if aggregate.is_fact_only(scope):
+        out = [_fact_headline(scope, view)]
+        out += _fact_leaders(scope, view)
+        out += _trend(scope, view)
+        out += _discount_reasons(scope)
+        return [line for line in out if line]
+
     out: list[str] = [_headline(scope, view)]
     out += _leaders(scope, view)
     out += _trend(scope, view)
@@ -54,12 +61,66 @@ def _headline(scope: pd.DataFrame, view: ViewState) -> str:
         return f"За {window} факт {numbers.money(fact)}; плана на этот отрезок нет."
     completion = fact / plan * 100
     gap = fact - plan
-    verdict = "план выполнен" if completion >= 100 else "план не выполнен"
     return (
         f"За {window}: план {numbers.money(plan)}, факт {numbers.money(fact)}, "
-        f"{verdict} на {numbers.percent(completion)} "
+        f"план выполнен на {numbers.percent(completion)} "
         f"({numbers.signed_money(gap)})."
     )
+
+
+def _fact_headline(scope: pd.DataFrame, view: ViewState) -> str:
+    total = aggregate.totals(scope)
+    fact = total.get(Metric.FACT_AMOUNT.value, 0.0)
+    discount = total.get(Metric.DISCOUNT_AMOUNT.value, 0.0)
+    deals = int(total.get(Metric.SALES_COUNT.value, 0.0))
+    window = numbers.range_label(view.date_from, view.date_to)
+    line = f"За {window}: факт {numbers.money(fact)}, сделок {numbers.grouped(deals)}"
+    if discount and fact:
+        line += f", скидок {numbers.money(discount)} ({numbers.percent(discount / fact * 100)} от факта)"
+    return line + ". Плана по клиентам в данных нет — сравнивать не с чем."
+
+
+def _fact_leaders(scope: pd.DataFrame, view: ViewState) -> list[str]:
+    """Без плана лидер — тот, на кого приходится больше всего факта."""
+    dimension = view.primary
+    # По причинам скидок «лидер по факту» — почти всегда «Без скидки»: это не
+    # инсайт. Про причины говорит _discount_reasons, по сумме скидки.
+    if dimension is Dimension.DISCOUNT_REASON:
+        return []
+    grouped = aggregate.group(scope, [dimension])
+    total = grouped[Metric.FACT_AMOUNT.value].sum() if len(grouped) else 0.0
+    if len(grouped) < 2 or not total:
+        return []
+    column = aggregate.FIELD[dimension]
+    top = grouped.loc[grouped[Metric.FACT_AMOUNT.value].idxmax()]
+    share = top[Metric.FACT_AMOUNT.value] / total * 100
+    return [
+        f"Крупнейшая доля факта — {top[column]}: "
+        f"{numbers.money(top[Metric.FACT_AMOUNT.value])}, {numbers.percent(share)} от всего."
+    ]
+
+
+def _discount_reasons(scope: pd.DataFrame) -> list[str]:
+    """Ответ на «какие скидки делались и почему»: причины считаются по сумме
+    скидки, продажи без скидки в разбор не идут."""
+    if "discount_reason" not in scope.columns:
+        return []
+    given = scope[scope[Metric.DISCOUNT_AMOUNT.value] > 0]
+    if not len(given):
+        return ["Скидок за этот отрезок не было."]
+    by_reason = (
+        given.groupby("discount_reason")[Metric.DISCOUNT_AMOUNT.value].sum().sort_values(ascending=False)
+    )
+    total = by_reason.sum()
+    parts = [
+        f"{reason.lower()} — {numbers.percent(value / total * 100)}"
+        for reason, value in by_reason.head(3).items()
+    ]
+    head = by_reason.index[0]
+    return [
+        f"Главная причина скидок — {head.lower()}: {numbers.money(by_reason.iloc[0])}. "
+        f"Разбивка по сумме: {', '.join(parts)}."
+    ]
 
 
 def _leaders(scope: pd.DataFrame, view: ViewState) -> list[str]:

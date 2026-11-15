@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     detail_row_limit: int = 200_000
     session_ttl_minutes: int = 180
     max_sessions: int = 64
+    # Каждая реплика — платный вызов модели. Потолок не даёт скрипту или
+    # залипшей клавише выжечь бюджет OpenAI.
+    ask_per_minute: int = 30
 
     @property
     def bi_reader_dsn(self) -> str:

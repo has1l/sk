@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app import aggregate, calculations, kpi, numbers
+from app import aggregate, calculations, diagnose, kpi, layout, numbers
 from app.calculations import CalcError, Context
 from app.labels import (
     DIMENSION_LABELS,
@@ -80,7 +80,16 @@ FILTER_DIMENSIONS = [
     Dimension.OUTLET_TYPE,
     Dimension.CATEGORY,
     Dimension.PRODUCT,
+    Dimension.CLIENT_SEGMENT,
+    Dimension.CLIENT,
+    Dimension.DISCOUNT_REASON,
 ]
+
+# Разрезы клиентской ветки. На переключатель они попадают, только когда
+# таблица сессии клиентская: в основной таблице этих колонок нет.
+CLIENT_DIMENSIONS = [Dimension.CLIENT, Dimension.CLIENT_SEGMENT, Dimension.DISCOUNT_REASON]
+
+NO_PLAN_NOTE = "Плана по клиентам нет — показан факт."
 
 
 def default_config(view: ViewState) -> DashboardConfig:
@@ -90,6 +99,7 @@ def default_config(view: ViewState) -> DashboardConfig:
             PanelConfig(id="p2", kind=PanelKind.STRUCTURE, limit=8),
             PanelConfig(id="p3", kind=PanelKind.TOP, limit=10),
             PanelConfig(id="p4", kind=PanelKind.COMPLETION_TREND),
+            PanelConfig(id="p5", kind=PanelKind.WATERFALL, limit=6),
         ]
     )
 
@@ -185,6 +195,11 @@ def _series(fields: list[str], steps: list[CalcStep]) -> list[Series]:
 
 # ─── панели ───────────────────────────────────────────────────────────────────
 
+#: Сколько периодов план-факт ещё выдерживает столбцами. Выше — переходим на
+#: линию: на каждый период приходится по две полоски, и к пятнадцати периодам
+#: их уже тридцать.
+_BARS_MAX = 14
+
 
 def _period_panel(
     config: PanelConfig, scope: pd.DataFrame, view: ViewState, steps: list[CalcStep]
@@ -197,8 +212,17 @@ def _period_panel(
     grouped = aggregate.group(scope, [dimension])
     context = Context(period_field=aggregate.FIELD[dimension], group_fields=[])
     grouped, notes = apply_steps(grouped, steps, context)
+    fact_only = aggregate.is_fact_only(scope)
 
-    if view.mode is ViewMode.PERCENT:
+    if fact_only and view.mode is not ViewMode.GROWTH:
+        # Плана по клиентам нет: вторая серия была бы нулями, а «выполнение»
+        # — прочерками. Рисуем то, что есть, и говорим, почему так.
+        kind = "bar" if len(grouped) <= _BARS_MAX else "line"
+        fields, reference = [Metric.FACT_AMOUNT.value], None
+        title = f"Факт по {genitive(dimension)}"
+        if view.mode is ViewMode.PERCENT:
+            notes.append(NO_PLAN_NOTE)
+    elif view.mode is ViewMode.PERCENT:
         grouped = calculations.apply(grouped, [_completion_step()], context)
         fields, kind, reference = [COMPLETION_FIELD], "bar", 100.0
         title = f"Выполнение плана по {genitive(dimension)}"
@@ -206,8 +230,23 @@ def _period_panel(
         grouped = calculations.apply(grouped, [_growth_step()], context)
         fields, kind, reference = [GROWTH_FIELD], "bar", 0.0
         title = f"Прирост факта по {genitive(dimension)}"
+        # Прирост считается к предыдущему периоду, и у первого его нет. Если
+        # период в выборке один, пустыми окажутся все значения — и без
+        # объяснения панель показывает голые оси, а человек думает, что
+        # сломалось.
+        if not grouped[GROWTH_FIELD].notna().any():
+            notes.append(
+                f"Прирост считается к предыдущему периоду, а в выборке "
+                f"{'он один' if len(grouped) == 1 else 'их не с чем сравнивать'} — "
+                f"сравнивать не с чем. Возьмите более длинный период или "
+                f"укрупните его зерно."
+            )
     else:
-        fields, kind, reference = [m.value for m in PLAN_FACT], "bar", None
+        # Две серии столбцами читаются, пока периодов немного. На тридцати трёх
+        # месяцах это шестьдесят шесть полосок в палец шириной — частокол, по
+        # которому ничего не сравнить. Длинный ряд во времени — это линия.
+        kind = "bar" if len(grouped) <= _BARS_MAX else "line"
+        fields, reference = [m.value for m in PLAN_FACT], None
         title = f"План-факт по {genitive(dimension)}"
 
     local = steps + [_completion_step(), _growth_step()]
@@ -298,9 +337,10 @@ def _top_panel(
     # Переключатель вида действует и здесь: в режиме процентов ТОП строится по
     # выполнению плана, иначе — по выбранной метрике. Явная сортировка из
     # «отсортируй третий график по…» сильнее обоих.
+    fact_only = aggregate.is_fact_only(scope)
     if config.sort_field:
         sort_field = config.sort_field
-    elif view.mode is ViewMode.PERCENT:
+    elif view.mode is ViewMode.PERCENT and not fact_only:
         sort_field = COMPLETION_FIELD
     else:
         sort_field = view.metric.value
@@ -316,7 +356,11 @@ def _top_panel(
         ordered = ordered.head(config.limit).reset_index(drop=True)
 
     fields = [sort_field]
-    columns = _unique([sort_field, Metric.PLAN_AMOUNT.value, Metric.FACT_AMOUNT.value])
+    columns = _unique(
+        [sort_field, Metric.FACT_AMOUNT.value]
+        if fact_only
+        else [sort_field, Metric.PLAN_AMOUNT.value, Metric.FACT_AMOUNT.value]
+    )
     sorted_label = column_of(sort_field, local).label
     # «ТОП-10» из восьми регионов — вранье: заголовок называет ТОПом только
     # урезанный список.
@@ -350,10 +394,29 @@ def _trend_panel(
     grouped = aggregate.group(scope, [dimension])
     context = Context(period_field=period_field, group_fields=[])
     grouped, notes = apply_steps(grouped, steps, context)
+    if aggregate.is_fact_only(scope) and config.series_field is None:
+        return _discount_trend(config, grouped, grain, steps, notes)
     grouped = calculations.apply(grouped, [_completion_step()], context)
 
     local = steps + [_completion_step()]
     fields = [COMPLETION_FIELD]
+    chosen = next((st for st in steps if st.field == config.series_field), None)
+    if chosen is not None and chosen.field in grouped.columns:
+        return ChartPanel(
+            id=config.id,
+            spec=ChartSpec(
+                kind="line",
+                title=config.title or f"{calculations.step_title(chosen)} по {genitive(dimension)}",
+                x_field=period_field,
+                x_label=GRAIN_LABELS[grain],
+                y_label="%" if chosen.unit == "percent" else column_of(chosen.field, local).label,
+                series=_series([chosen.field], local),
+                reference=0.0 if chosen.unit == "percent" else None,
+                zoom_group="period",
+            ),
+            table=to_table(grouped, [dimension], [chosen.field, *[m.value for m in PLAN_FACT]], local),
+            note="; ".join(notes) or None,
+        )
     if view.mode is ViewMode.GROWTH:
         grouped = calculations.apply(grouped, [_growth_step()], context)
         fields = [GROWTH_FIELD]
@@ -372,6 +435,55 @@ def _trend_panel(
             zoom_group="period",
         ),
         table=to_table(grouped, [dimension], [*fields, *[m.value for m in PLAN_FACT]], local),
+        note="; ".join(notes) or None,
+    )
+
+
+DISCOUNT_SHARE_FIELD = "discount_share_pct"
+
+
+def _discount_share_step() -> CalcStep:
+    return CalcStep(
+        id="__discount_share",
+        title="Доля скидок, %",
+        kind=StepKind.ARITHMETIC,
+        field=DISCOUNT_SHARE_FIELD,
+        expression="discount_amount / fact_amount * 100",
+        unit="percent",
+    )
+
+
+def _discount_trend(
+    config: PanelConfig,
+    grouped: pd.DataFrame,
+    grain: PeriodGrain,
+    steps: list[CalcStep],
+    notes: list[str],
+) -> ChartPanel:
+    """Панель 4 клиентской ветки. Выполнения плана тут нет, а вопрос про
+    клиента почти всегда про скидки — поэтому линия показывает, какую долю
+    факта отдали скидками в каждом периоде."""
+    dimension = grain.dimension
+    period_field = aggregate.FIELD[dimension]
+    grouped = calculations.apply(grouped, [_discount_share_step()])
+    local = steps + [_discount_share_step()]
+    return ChartPanel(
+        id=config.id,
+        spec=ChartSpec(
+            kind="line",
+            title=config.title or f"Доля скидок в факте по {genitive(dimension)}",
+            x_field=period_field,
+            x_label=GRAIN_LABELS[grain],
+            y_label="%",
+            series=_series([DISCOUNT_SHARE_FIELD], local),
+            zoom_group="period",
+        ),
+        table=to_table(
+            grouped,
+            [dimension],
+            [DISCOUNT_SHARE_FIELD, Metric.DISCOUNT_AMOUNT.value, Metric.FACT_AMOUNT.value],
+            local,
+        ),
         note="; ".join(notes) or None,
     )
 
@@ -416,11 +528,159 @@ def _growth_step() -> CalcStep:
     )
 
 
+def _waterfall_panel(
+    config: PanelConfig, scope: pd.DataFrame, view: ViewState, steps: list[CalcStep]
+) -> ChartPanel | None:
+    """Панель 5. Из чего сложился разрыв плана и факта.
+
+    Ступеньки — вклад каждого значения разреза, хвост свёрнут в «Прочее».
+    Сумма ступенек обязана сходиться с фактом, иначе мост врёт: за это
+    отвечает diagnose.waterfall, а не рисовальщик.
+    """
+    total = aggregate.totals(scope)
+    plan = total.get(Metric.PLAN_AMOUNT.value, 0.0)
+    fact = total.get(Metric.FACT_AMOUNT.value, 0.0)
+    if not plan or not len(scope):
+        return None
+
+    decomposition = diagnose.decompose(scope, view)
+    if decomposition is None:
+        return None
+
+    rows = diagnose.waterfall(decomposition, plan, fact)
+    if not rows:
+        return None
+
+    dimension = decomposition.levels[0].dimension
+    frame = pd.DataFrame(rows)
+    table = Table(
+        columns=[
+            Column(field="label", label=DIMENSION_LABELS[dimension], kind="dimension"),
+            Column(field="value", label="Вклад в разрыв", kind="metric", unit="rub"),
+            Column(field="measure", label="Тип ступени", kind="dimension"),
+        ],
+        rows=frame.to_dict("records"),
+        row_count=len(rows),
+    )
+    gap = fact - plan
+    verdict = "перевес" if gap >= 0 else "разрыв"
+    return ChartPanel(
+        id=config.id,
+        spec=ChartSpec(
+            kind="waterfall",
+            title=config.title or f"Из чего сложился {verdict} {numbers.signed_money(gap)}",
+            x_field="label",
+            x_label=DIMENSION_LABELS[dimension],
+            y_label=UNIT_AXIS_LABELS["rub"],
+            series=[Series(field="value", label="Вклад", unit="rub")],
+        ),
+        table=table,
+        note=decomposition.chain[0] if decomposition.chain else None,
+    )
+
+
+def _custom_panel(
+    config: PanelConfig, scope: pd.DataFrame, view: ViewState, steps: list[CalcStep]
+) -> ChartPanel:
+    """Панель, собранная руками: разрез, метрика и вид графика выбраны в меню.
+
+    У остальных панелей смысл задан вопросом пользователя. У этой своего
+    смысла нет — есть только выбор, и всё невыбранное берётся из текущего
+    вида. Поэтому она и подчиняется переключателю «Вид» наравне с панелью
+    план-факта: иначе на одном экране половина панелей показывала бы
+    проценты, а половина рубли.
+    """
+    dimension = config.dimension or view.primary
+    metric = config.metric or view.metric
+    temporal = dimension.is_temporal
+    period_field = aggregate.FIELD[dimension] if temporal else None
+
+    grouped = aggregate.group(scope, [dimension])
+    context = Context(period_field=period_field, group_fields=[])
+    grouped, notes = apply_steps(grouped, steps, context)
+    local = steps + [_completion_step(), _growth_step()]
+
+    kind = config.chart or ("line" if temporal else "bar")
+    field, reference = metric.value, None
+    title = f"{METRIC_LABELS[metric]} по {genitive(dimension)}"
+
+    # Круг показывает доли одного целого, поэтому ему нужна складываемая
+    # величина. Проценты выполнения в доли не складываются: сектор «70 %»
+    # рядом с сектором «130 %» не значит ничего.
+    shares = kind == "pie"
+    if view.mode is ViewMode.PERCENT and not shares:
+        grouped = calculations.apply(grouped, [_completion_step()], context)
+        field, reference = COMPLETION_FIELD, 100.0
+        title = f"Выполнение плана по {genitive(dimension)}"
+    elif view.mode is ViewMode.GROWTH and not shares:
+        if temporal:
+            grouped = calculations.apply(grouped, [_growth_step()], context)
+            field, reference = GROWTH_FIELD, 0.0
+            title = f"Прирост {METRIC_GENITIVE[metric]} по {genitive(dimension)}"
+            if not grouped[GROWTH_FIELD].notna().any():
+                notes.append(
+                    "Прирост считается к предыдущему периоду, а в выборке он один — "
+                    "сравнивать не с чем. Возьмите более длинный период или "
+                    "укрупните его зерно."
+                )
+        else:
+            # Прирост требует предыдущего периода, а регионы в ряд не
+            # выстраиваются. Молча показать метрику нельзя: подпись сказала бы
+            # «прирост», а цифры были бы абсолютные.
+            notes.append(
+                f"Прирост считается к предыдущему периоду, а {genitive(dimension)} "
+                "в ряд не выстраиваются — здесь показана сама метрика."
+            )
+
+    if len(grouped):
+        if temporal:
+            grouped = grouped.sort_values(period_field).reset_index(drop=True)
+        else:
+            grouped = grouped.sort_values(
+                field, ascending=config.order is SortOrder.ASC, na_position="last"
+            ).reset_index(drop=True)
+            if config.limit and len(grouped) > config.limit:
+                grouped = (
+                    _collapse_tail(grouped, dimension, config.limit)
+                    if shares
+                    else grouped.head(config.limit).reset_index(drop=True)
+                )
+
+    return ChartPanel(
+        id=config.id,
+        spec=ChartSpec(
+            kind=kind,
+            title=config.title or title,
+            x_field=aggregate.FIELD[dimension],
+            x_label=GRAIN_LABELS[PeriodGrain(dimension.value)]
+            if temporal
+            else DIMENSION_LABELS[dimension],
+            y_label=_unit_axis([field], local),
+            series=_series([field], local),
+            reference=reference,
+            # Синхронный зум только у временных осей: совмещать зум месяцев с
+            # зумом регионов нечего.
+            zoom_group="period" if temporal else None,
+        ),
+        table=to_table(grouped, [dimension], [field], local),
+        note="; ".join(notes) or None,
+    )
+
+
+def builtin_steps() -> list[CalcStep]:
+    """Вычисления, которые дашборд делает сам, без просьбы. Показываются в
+    происхождении цифр наравне со стеком пользователя: на экране они есть.
+    """
+    return [_completion_step(), _deviation_step(), _growth_step()]
+
+
 BUILDERS = {
     PanelKind.PLAN_FACT_PERIOD: _period_panel,
     PanelKind.STRUCTURE: _structure_panel,
     PanelKind.TOP: _top_panel,
     PanelKind.COMPLETION_TREND: _trend_panel,
+    PanelKind.WATERFALL: _waterfall_panel,
+    PanelKind.CUSTOM: _custom_panel,
 }
 
 
@@ -456,19 +716,21 @@ def filter_options(frame: pd.DataFrame, view: ViewState) -> list[FilterOption]:
     return options
 
 
-def toggle_options(view: ViewState) -> list[ToggleOption]:
+def toggle_options(view: ViewState, fact_only: bool = False) -> list[ToggleOption]:
+    dimensions = TOGGLE_DIMENSIONS + (CLIENT_DIMENSIONS if fact_only else [])
+    metrics = [m for m in TOGGLE_METRICS if not (fact_only and m is Metric.PLAN_AMOUNT)]
     return [
         ToggleOption(
             key="primary",
             label="Разрез",
             value=view.primary.value,
-            options=[{"value": d.value, "label": DIMENSION_LABELS[d]} for d in TOGGLE_DIMENSIONS],
+            options=[{"value": d.value, "label": DIMENSION_LABELS[d]} for d in dimensions],
         ),
         ToggleOption(
             key="metric",
             label="Метрика",
             value=view.metric.value,
-            options=[{"value": m.value, "label": METRIC_LABELS[m]} for m in TOGGLE_METRICS],
+            options=[{"value": m.value, "label": METRIC_LABELS[m]} for m in metrics],
         ),
         ToggleOption(
             key="period_grain",
@@ -501,12 +763,24 @@ def build(
         if builder is None:
             continue
         built = builder(panel, scope, view, steps)
+        if built is None:
+            continue
         panels.append(built)
 
+    # Раскладка сводится с тем, что реально собралось, и записывается обратно
+    # в конфиг: оттуда она попадёт и в снимок машины времени, и в сохранённый
+    # дашборд — тем же путём, что и остальной рецепт.
+    config.layout = layout.reconcile(
+        config,
+        [p.id for p in panels],
+        wide={p.id for p in panels if p.spec.kind == "waterfall"},
+    )
+
     dashboard = Dashboard(
-        kpis=kpi.build(scope, view, previous),
+        kpis=kpi.build(scope, view, previous, fact_only=aggregate.is_fact_only(frame)),
         panels=panels,
         filters=filter_options(frame, view),
-        toggles=toggle_options(view),
+        toggles=toggle_options(view, aggregate.is_fact_only(frame)),
+        layout=config.layout,
     )
     return dashboard, notes

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -34,17 +35,27 @@ from app.schema import (
 
 LOOKBACK_MONTHS = 12
 
+# Крутилки дают десятки правок подряд: щелчок по каждому значению фильтра —
+# отдельный запрос. Подряд идущие однотипные правки сливаются в одну точку
+# возврата, иначе лента превращается в журнал нажатий.
+COALESCE_WINDOW = timedelta(seconds=20)
+
 
 @dataclass
 class Snapshot:
     """Состояние, к которому возвращает «отмени». Таблица в снимок не входит:
     она пересобирается стеком, поэтому хранить её незачем.
+
+    Снимок адресуемый: к нему возвращает не только «отмени», но и клик по
+    реплике в переписке — отсюда id и время.
     """
 
     label: str
     steps: list[CalcStep]
     view: ViewState
     config: DashboardConfig
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    at: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
@@ -63,8 +74,19 @@ class Analysis:
     dirty: bool = False
     history: list[Snapshot] = field(default_factory=list)
     touched_at: datetime = field(default_factory=datetime.now)
+    load_ms: float = 0.0
+    llm_calls: int = 0
 
-    def checkpoint(self, label: str) -> None:
+    def checkpoint(self, label: str, coalesce: bool = False) -> None:
+        """coalesce — не плодить точку, если такая же сделана только что.
+
+        Состояние в сохранённой точке при этом остаётся самым ранним из серии:
+        возврат отменяет всю возню с фильтрами, а не последний щелчок.
+        """
+        if coalesce and self.history:
+            last = self.history[-1]
+            if last.label == label and datetime.now() - last.at < COALESCE_WINDOW:
+                return
         self.history.append(
             Snapshot(
                 label=label,
@@ -74,6 +96,22 @@ class Analysis:
             )
         )
         del self.history[:-20]
+
+    def rewind(self, snapshot_id: str) -> str | None:
+        """Возврат к произвольной точке, а не только к предыдущей.
+
+        Текущее состояние уходит в историю первым — поэтому промах по точке
+        возврата отменяется тем же «отмени», что и всё остальное.
+        """
+        target = next((s for s in self.history if s.id == snapshot_id), None)
+        if target is None:
+            return None
+        self.checkpoint("возврат к точке")
+        self.steps = [s.model_copy(deep=True) for s in target.steps]
+        self.view = target.view.model_copy(deep=True)
+        self.config = target.config.model_copy(deep=True)
+        self.dirty = True
+        return target.label
 
     def undo(self) -> str | None:
         if not self.history:
@@ -122,25 +160,25 @@ def default_view(spec: QuerySpec, date_from: date | None, date_to: date | None) 
     )
 
 
-def load_frame(spec: QuerySpec, horizon: date) -> tuple[pd.DataFrame, str, list[str], date, date]:
+def load_frame(
+    spec: QuerySpec, horizon: date
+) -> tuple[pd.DataFrame, str, list[str], date, date, float]:
     built = sql_builder.build_detail(spec, horizon, LOOKBACK_MONTHS)
+    started = time.perf_counter()
     rows = db.select(built.sql, built.params)
-    frame = aggregate.prepare(pd.DataFrame(rows, columns=_frame_columns()))
+    elapsed = (time.perf_counter() - started) * 1000
+    frame = aggregate.prepare(pd.DataFrame(rows, columns=sql_builder.detail_columns(spec)))
     window_from = built.date_from
     window_to = built.date_to
     if window_from is None or window_to is None:
         low, high = aggregate.bounds(frame)
         window_from = window_from or low or horizon
         window_to = window_to or high or horizon
-    return frame, built.sql, built.notes, window_from, window_to
-
-
-def _frame_columns() -> list[str]:
-    return sql_builder.DETAIL_COLUMNS + [m.value for m in sql_builder.DETAIL_METRICS]
+    return frame, built.sql, built.notes, window_from, window_to, elapsed
 
 
 def create(question: str, spec: QuerySpec, horizon: date, title: str) -> Analysis:
-    frame, sql, notes, window_from, window_to = load_frame(spec, horizon)
+    frame, sql, notes, window_from, window_to, load_ms = load_frame(spec, horizon)
     view = default_view(spec, window_from, window_to)
     analysis = Analysis(
         id=uuid.uuid4().hex,
@@ -152,6 +190,7 @@ def create(question: str, spec: QuerySpec, horizon: date, title: str) -> Analysi
         config=dashboard.default_config(view),
         notes=list(notes),
         sql=sql,
+        load_ms=load_ms,
     )
     _remember(analysis)
     return analysis
@@ -162,8 +201,9 @@ def rebase(analysis: Analysis, spec: QuerySpec, horizon: date, question: str) ->
 
     Так «а теперь по точкам» меняет разрез, не теряя добавленные вычисления.
     """
-    frame, sql, notes, window_from, window_to = load_frame(spec, horizon)
+    frame, sql, notes, window_from, window_to, load_ms = load_frame(spec, horizon)
     analysis.checkpoint("изменение выборки")
+    analysis.load_ms = load_ms
     analysis.spec = spec
     analysis.frame = frame
     analysis.sql = sql
@@ -209,7 +249,7 @@ def _evict() -> None:
 def restore(state: dict[str, Any], horizon: date, saved_id: str | None) -> Analysis:
     """Открытие сохранённого дашборда: рецепт → таблица → тот же вид."""
     spec = QuerySpec.model_validate(state["spec"])
-    frame, sql, notes, window_from, window_to = load_frame(spec, horizon)
+    frame, sql, notes, window_from, window_to, load_ms = load_frame(spec, horizon)
     view = ViewState.model_validate(state["view"])
     if view.date_from is None:
         view.date_from = window_from
@@ -227,6 +267,7 @@ def restore(state: dict[str, Any], horizon: date, saved_id: str | None) -> Analy
         notes=list(notes),
         sql=sql,
         saved_id=saved_id,
+        load_ms=load_ms,
     )
     if not analysis.config.panels:
         analysis.config = dashboard.default_config(analysis.view)
