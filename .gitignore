@@ -45,3 +45,6 @@ db/data/
 # Как получить — db/seed/README.md
 db/seed/*.csv
 .cache/
+
+# Презентация для защиты — только локально: в собранные файлы вшит пароль прототипа
+docs/presentation/
