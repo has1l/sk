@@ -59,6 +59,21 @@ export default function App() {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns]);
 
+  /** Название в шапке ведёт на главную — стартовый экран с шаблонами. Без
+   *  перезагрузки: страница уже здесь. Текущая работа не теряется — она в
+   *  черновике, и стартовый экран предложит её продолжить. */
+  function goHome() {
+    if (session) draft.remember(session);
+    setTurns([]);
+    setSession(null);
+    setBoardOpen(false);
+    setShowSaved(false);
+    setMoves(null);
+    setOffer(null);
+    stampUrl(null);
+    setPending(draft.recall());
+  }
+
   /** Черновик пишется на каждое изменение сессии: падение вкладки не должно
    *  стоить получаса работы. */
   useEffect(() => {
@@ -258,7 +273,16 @@ export default function App() {
     <>
       <div id="shell" className={`app ${blank ? "blank" : ""}`}>
         <div className="topbar">
-          <div className="wordmark">
+          <a
+            className="wordmark"
+            href="/"
+            aria-label={`${PET_NAME} — на главную`}
+            onClick={(event) => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+              event.preventDefault();
+              goHome();
+            }}
+          >
             {/* Значок — тот же зверёк, что отвечает в чате: название продукта
                 и лицо бота одно и то же существо. */}
             <span className="glyph" aria-hidden="true">
@@ -275,7 +299,7 @@ export default function App() {
               </svg>
             </span>
             <span className="wordmark-text">{PET_NAME}</span>
-          </div>
+          </a>
           <div className="topbar-right">
             {session && (
               <button className="board-open" onClick={() => setBoardOpen(true)}>

@@ -244,6 +244,22 @@ body {
   font-size: 16px;
   font-weight: 600;
   color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  margin: -4px -6px;
+  padding: 4px 6px;
+  transition: background-color var(--fast) var(--ease);
+}
+
+/* Название — ссылка на главную. Подсказка тихая: лёгкая подложка, без
+   подчёркивания и смены цвета. */
+.wordmark:hover {
+  background: var(--accent-soft);
+}
+
+.wordmark:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .wordmark .glyph {
