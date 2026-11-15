@@ -54,7 +54,7 @@ export function SavedList({
       <div className="saved-tools">
         <input
           value={query}
-          placeholder="Поиск по названию или запросу…"
+          placeholder="Поиск по названию или запросу"
           onChange={(event) => setQuery(event.target.value)}
         />
         <select value={sort} onChange={(event) => setSort(event.target.value)}>
@@ -113,7 +113,7 @@ export function SavedList({
                     </button>
                   </>
                 ) : (
-                  <button className="link danger" disabled={busy} onClick={() => setConfirming(item.id)}>
+                  <button className="link" disabled={busy} onClick={() => setConfirming(item.id)}>
                     Удалить
                   </button>
                 )}

@@ -1,11 +1,16 @@
 import { useState } from "react";
 
 import { exportCsvUrl, exportHtmlUrl } from "../api";
-import type { SessionView, ViewState } from "../types";
-import { Chart } from "./Chart";
+import { downloadPicture } from "../picture";
+import type { Layout, PanelDraft, SessionView, ViewState } from "../types";
+import { AddPanel } from "./AddPanel";
+import { Anomalies } from "./Anomalies";
+import { Chart, isBlank } from "./Chart";
 import { DataTable } from "./DataTable";
 import { Filters } from "./Filters";
 import { KpiRow } from "./KpiRow";
+import { PanelGrid } from "./PanelGrid";
+import { Provenance } from "./Provenance";
 import { StepStack } from "./StepStack";
 import { Toggles } from "./Toggles";
 
@@ -18,6 +23,9 @@ export function Dashboard({
   session,
   busy,
   onView,
+  onLayout,
+  onAddPanel,
+  onRemovePanel,
   onDropStep,
   onUndo,
   onSave,
@@ -25,12 +33,15 @@ export function Dashboard({
   session: SessionView;
   busy: boolean;
   onView: (view: ViewState) => void;
+  onLayout: (layout: Layout) => void;
+  onAddPanel: (draft: PanelDraft) => void;
+  onRemovePanel: (panelId: string) => void;
   onDropStep: (id: string) => void;
   onUndo: () => void;
   onSave: (title: string | null, asNew: boolean) => void;
 }) {
   const [zooms, setZooms] = useState<Record<string, ZoomRange>>({});
-  const [showSql, setShowSql] = useState(false);
+  const [drawing, setDrawing] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
 
@@ -112,6 +123,20 @@ export function Dashboard({
           <a className="ghost" href={exportHtmlUrl(session.session_id)} download>
             HTML
           </a>
+          <button
+            className="ghost"
+            disabled={drawing}
+            onClick={async () => {
+              setDrawing(true);
+              try {
+                await downloadPicture(session.title, session.question, dashboard.kpis);
+              } finally {
+                setDrawing(false);
+              }
+            }}
+          >
+            {drawing ? "Рисую…" : "Картинка"}
+          </button>
         </div>
       </div>
 
@@ -136,24 +161,36 @@ export function Dashboard({
         </ul>
       )}
 
+      <Anomalies items={session.anomalies} />
+
       {session.notes.map((note) => (
         <p className="note" key={note}>
           {note}
         </p>
       ))}
 
-      <div className="panels">
-        {dashboard.panels.map((panel) => (
-          <section className={`panel ${panel.spec.kind}`} key={panel.id}>
+      <PanelGrid
+        layout={dashboard.layout}
+        panels={dashboard.panels}
+        busy={busy}
+        onLayout={onLayout}
+        onRemovePanel={onRemovePanel}
+        tools={<AddPanel busy={busy} onAdd={onAddPanel} />}
+        render={(panel, slot) => (
+          <>
             <Chart
               panel={panel}
               zoom={panel.spec.zoom_group ? zooms[panel.spec.zoom_group] : undefined}
               onZoom={onZoom}
+              /* Растянутой на всю ширину коробке нужна и высота: иначе график
+                 становится полосой в треть экрана шириной и ладонь высотой. */
+              height={panel.spec.kind === "pie" ? 420 : slot.w > 1 ? 400 : 340}
             />
-            {panel.note && <p className="note">{panel.note}</p>}
-          </section>
-        ))}
-      </div>
+            {/* У пустой панели объяснение уже внутри — второй раз не печатаем. */}
+            {panel.note && !isBlank(panel) && <p className="note">{panel.note}</p>}
+          </>
+        )}
+      />
 
       <StepStack
         steps={session.steps}
@@ -164,14 +201,7 @@ export function Dashboard({
 
       <DataTable table={session.table} csvUrl={exportCsvUrl(session.session_id)} />
 
-      {session.sql && (
-        <div className="sql">
-          <button className="link" onClick={() => setShowSql((v) => !v)}>
-            {showSql ? "Скрыть запрос" : "Показать запрос к базе"}
-          </button>
-          {showSql && <pre>{session.sql}</pre>}
-        </div>
-      )}
+      <Provenance origin={session.provenance} />
     </div>
   );
 }

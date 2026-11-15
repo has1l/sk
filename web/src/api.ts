@@ -1,9 +1,14 @@
 import type {
   AskResponse,
+  Draft,
+  Layout,
+  PanelDraft,
+  PanelOptions,
+  QueryTemplate,
   SavedDashboard,
   SavedVersion,
   SessionView,
-  QueryTemplate,
+  Stage,
   ViewState,
 } from "./types";
 
@@ -26,6 +31,58 @@ export function ask(question: string, sessionId: string | null): Promise<AskResp
   });
 }
 
+/** То же, что ask, но с показом хода работы.
+ *
+ *  Спиннер не отличает работу от зависания, поэтому шаги разбора приходят
+ *  потоком и показываются по мере готовности. Ответ в конце — тот же самый. */
+export async function askStream(
+  question: string,
+  sessionId: string | null,
+  onStage: (stage: Stage) => void,
+): Promise<AskResponse> {
+  const response = await fetch("/api/ask/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, session_id: sessionId }),
+  });
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Сервер ответил ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: AskResponse | null = null;
+  let failure: string | null = null;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Событие кончается пустой строкой; хвост без неё дочитываем следующим куском.
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+    for (const chunk of chunks) {
+      const event = /^event: (.+)$/m.exec(chunk)?.[1];
+      const data = chunk
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6))
+        .join("\n");
+      if (!event || !data) continue;
+      const payload = JSON.parse(data);
+      if (event === "stage") onStage(payload as Stage);
+      else if (event === "result") result = payload as AskResponse;
+      else if (event === "error") failure = payload.detail ?? "неизвестная ошибка";
+    }
+  }
+
+  if (failure) throw new Error(failure);
+  if (!result) throw new Error("сервер не прислал ответ");
+  return result;
+}
+
 /** Фильтры и переключатели: пересчёт без модели и без новой выборки. */
 export function setView(sessionId: string, view: ViewState): Promise<SessionView> {
   return call("/api/view", {
@@ -34,8 +91,45 @@ export function setView(sessionId: string, view: ViewState): Promise<SessionView
   });
 }
 
+export function setLayout(sessionId: string, layout: Layout): Promise<SessionView> {
+  return call("/api/layout", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, layout }),
+  });
+}
+
+/** Из чего можно собрать свою панель. Справочник, сессии не требует. */
+export function panelOptions(): Promise<PanelOptions> {
+  return call("/api/panel-options");
+}
+
+/** Своя панель. Ячейку в раскладке клиент не создаёт — согласование на
+ *  сервере само допишет её в конец открытой вкладки. */
+export function addPanel(sessionId: string, panel: PanelDraft): Promise<SessionView> {
+  return call(`/api/session/${sessionId}/panel`, {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, ...panel }),
+  });
+}
+
+export function removePanel(sessionId: string, panelId: string): Promise<SessionView> {
+  return call(`/api/session/${sessionId}/panel/${panelId}`, { method: "DELETE" });
+}
+
 export function undo(sessionId: string): Promise<AskResponse> {
   return call(`/api/session/${sessionId}/undo`, { method: "POST" });
+}
+
+/** Возврат к произвольной точке переписки, а не только к предыдущей. */
+export function rewind(sessionId: string, snapshotId: string): Promise<AskResponse> {
+  return call(`/api/session/${sessionId}/rewind/${snapshotId}`, { method: "POST" });
+}
+
+export function restoreDraft(draft: Draft): Promise<AskResponse> {
+  return call("/api/draft/restore", {
+    method: "POST",
+    body: JSON.stringify({ recipe: draft.recipe }),
+  });
 }
 
 export function dropStep(sessionId: string, stepId: string): Promise<AskResponse> {

@@ -14,7 +14,7 @@ export function Toggles({
   return (
     <div className="toggles">
       {toggles.map((toggle) => (
-        <label className="toggle" key={toggle.key}>
+        <label className="toggle" key={toggle.key} data-toggle={toggle.key}>
           <span>{toggle.label}</span>
           <select
             value={toggle.value}

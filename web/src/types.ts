@@ -25,7 +25,7 @@ export interface Series {
 }
 
 export interface ChartSpec {
-  kind: "bar" | "hbar" | "line" | "pie" | "area";
+  kind: "bar" | "hbar" | "line" | "pie" | "area" | "waterfall";
   title: string;
   x_field: string;
   x_label: string;
@@ -68,11 +68,54 @@ export interface ToggleOption {
   options: { value: string; label: string }[];
 }
 
+/** Ячейка раскладки. Координат нет: место задаётся порядком в списке, строки
+ *  считает укладка. Несколько панелей в ячейке — склеенная коробка с
+ *  вкладками внутри. */
+export interface Slot {
+  id: string;
+  w: number;
+  panels: string[];
+  active: number;
+}
+
+export interface BoardTab {
+  id: string;
+  title: string;
+  slots: Slot[];
+}
+
+export interface Layout {
+  columns: number;
+  tabs: BoardTab[];
+  active: string;
+}
+
+/** Выбор для своей панели. Подписи приходят с сервера: клиент никогда не
+ *  строит их из имени поля. */
+export interface Choice {
+  value: string;
+  label: string;
+}
+
+export interface PanelOptions {
+  dimensions: Choice[];
+  metrics: Choice[];
+  charts: Choice[];
+}
+
+export interface PanelDraft {
+  dimension: string;
+  metric: string;
+  chart: string;
+  limit?: number;
+}
+
 export interface Dashboard {
   kpis: Kpi[];
   panels: ChartPanel[];
   filters: FilterOption[];
   toggles: ToggleOption[];
+  layout: Layout;
 }
 
 export interface AppliedFilter {
@@ -101,16 +144,86 @@ export interface StepView {
   formula: string;
 }
 
+export interface GapFactor {
+  label: string;
+  value: number;
+  share: number;
+  direction: "drag" | "lift";
+}
+
+export interface GapLevel {
+  dimension: string;
+  label: string;
+  factors: GapFactor[];
+}
+
+export interface Decomposition {
+  headline: string;
+  total: number;
+  unit: Unit;
+  levels: GapLevel[];
+  chain: string[];
+}
+
+export interface Anomaly {
+  label: string;
+  text: string;
+  severity: "high" | "medium";
+  dimension: string;
+}
+
+export interface Formula {
+  field: string;
+  title: string;
+  kind: string;
+  expression: string;
+  inputs: string[];
+}
+
+/** Происхождение цифр: чем именно обеспечено то, что бот не навредит. */
+export interface Provenance {
+  sql: string | null;
+  role: string;
+  statement_timeout: string;
+  read_only: boolean;
+  row_count: number;
+  load_ms: number;
+  model: string;
+  llm_calls: number;
+  formulas: Formula[];
+  guarantees: string[];
+}
+
+export interface TimelineEntry {
+  id: string;
+  label: string;
+  at: string;
+  summary: string;
+  current: boolean;
+}
+
+/** Шаг разбора реплики, приходящий потоком, пока бот работает. */
+export interface Stage {
+  text: string;
+  detail: string;
+}
+
 export interface SessionView {
   session_id: string;
   title: string;
   question: string;
   spec: unknown;
   view: ViewState;
+  recipe: unknown;
   steps: StepView[];
   table: Table;
   dashboard: Dashboard;
+  summary: string;
   insights: string[];
+  anomalies: Anomaly[];
+  decomposition: Decomposition | null;
+  provenance: Provenance | null;
+  timeline: TimelineEntry[];
   notes: string[];
   sql: string | null;
   saved_id: string | null;
@@ -157,4 +270,20 @@ export interface ChatTurn {
   state: "pending" | "done" | "error";
   answer?: AskResponse;
   error?: string;
+  stages?: Stage[];
+  /** Реплика-пасхалка: ответа сервера за ней нет, только настроение зверька.
+   *  Отдельное поле, а не поддельный AskResponse: подделка однажды утечёт в
+   *  код, который ждёт настоящие данные. */
+  pet?: string;
+  petSay?: string;
+}
+
+/** Черновик: рецепт анализа, а не данные. Лежит в браузере, переживает
+ *  перезагрузку страницы и перезапуск сервера — сессия на сервере не
+ *  переживает ни того, ни другого. */
+export interface Draft {
+  title: string;
+  question: string;
+  recipe: unknown;
+  at: number;
 }

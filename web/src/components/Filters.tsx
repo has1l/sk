@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { FilterOption } from "../types";
 
@@ -9,15 +9,18 @@ const VISIBLE = 80;
 function FilterBox({
   option,
   busy,
+  open,
+  onOpen,
   onToggle,
   onClear,
 }: {
   option: FilterOption;
   busy: boolean;
+  open: boolean;
+  onOpen: (dimension: string | null) => void;
   onToggle: (dimension: string, value: string) => void;
   onClear: (dimension: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   const found = useMemo(() => {
@@ -30,8 +33,8 @@ function FilterBox({
 
   const chosen = option.selected.length;
   return (
-    <div className={`filter ${open ? "open" : ""}`}>
-      <button className="filter-head" disabled={busy} onClick={() => setOpen((v) => !v)}>
+    <div className={`filter ${open ? "open" : ""}`} data-filter={option.dimension}>
+      <button className="filter-head" disabled={busy} onClick={() => onOpen(open ? null : option.dimension)}>
         <span className="filter-label">{option.label}</span>
         <span className="filter-state">
           {chosen ? `${chosen} из ${option.values.length}` : `все · ${option.values.length}`}
@@ -41,8 +44,9 @@ function FilterBox({
       {open && (
         <div className="filter-body">
           <input
+            className="filter-search"
             value={query}
-            placeholder="Поиск…"
+            placeholder="Поиск"
             onChange={(event) => setQuery(event.target.value)}
             autoFocus
           />
@@ -90,13 +94,40 @@ export function Filters({
   onClearAll: () => void;
 }) {
   const active = filters.filter((f) => f.selected.length).length;
+  // Открыт один список за раз. Каждый фильтр помнил своё «открыто», и два
+  // соседних списка ложились друг на друга.
+  const [opened, setOpened] = useState<string | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!opened) return;
+    // Щелчок мимо закрывает список. Escape тоже, но слой дашборда слушает ту
+    // же клавишу — признак data-inner говорит ему, что клавиша наша.
+    document.body.dataset.inner = "1";
+    const away = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpened(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpened(null);
+    };
+    window.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", key);
+    return () => {
+      delete document.body.dataset.inner;
+      window.removeEventListener("pointerdown", away);
+      window.removeEventListener("keydown", key);
+    };
+  }, [opened]);
+
   return (
-    <div className="filters">
+    <div className="filters" ref={root}>
       {filters.map((option) => (
         <FilterBox
           key={option.dimension}
           option={option}
           busy={busy}
+          open={opened === option.dimension}
+          onOpen={setOpened}
           onToggle={onToggle}
           onClear={onClear}
         />
